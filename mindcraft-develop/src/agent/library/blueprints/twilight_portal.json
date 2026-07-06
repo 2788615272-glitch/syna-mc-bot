@@ -1,0 +1,55 @@
+{
+  "name": "twilight_portal",
+  "description": "暮色森林传送门框架 - 2x2花池+水。建好后往水里扔一颗钻石即可激活传送门。",
+  "author": "syna",
+  "version": "1.0",
+  "tags": ["portal", "twilight_forest", "暮色森林"],
+  "size": { "x": 4, "y": 2, "z": 4 },
+  "notes": "框架由草方块围成，内部种花并灌水。激活方式：对着水池扔一颗钻石(Q键)。需要暮色森林mod。",
+  "layers": [
+    {
+      "y": 0,
+      "comment": "底层：外圈草方块，内部泥土（水池底）",
+      "blocks": [
+        { "x": 0, "z": 0, "block": "grass_block" },
+        { "x": 1, "z": 0, "block": "grass_block" },
+        { "x": 2, "z": 0, "block": "grass_block" },
+        { "x": 3, "z": 0, "block": "grass_block" },
+        { "x": 0, "z": 1, "block": "grass_block" },
+        { "x": 1, "z": 1, "block": "dirt" },
+        { "x": 2, "z": 1, "block": "dirt" },
+        { "x": 3, "z": 1, "block": "grass_block" },
+        { "x": 0, "z": 2, "block": "grass_block" },
+        { "x": 1, "z": 2, "block": "dirt" },
+        { "x": 2, "z": 2, "block": "dirt" },
+        { "x": 3, "z": 2, "block": "grass_block" },
+        { "x": 0, "z": 3, "block": "grass_block" },
+        { "x": 1, "z": 3, "block": "grass_block" },
+        { "x": 2, "z": 3, "block": "grass_block" },
+        { "x": 3, "z": 3, "block": "grass_block" }
+      ]
+    },
+    {
+      "y": 1,
+      "comment": "上层：外圈种花（触发条件），内部放水",
+      "blocks": [
+        { "x": 0, "z": 0, "block": "dandelion" },
+        { "x": 1, "z": 0, "block": "poppy" },
+        { "x": 2, "z": 0, "block": "blue_orchid" },
+        { "x": 3, "z": 0, "block": "dandelion" },
+        { "x": 0, "z": 1, "block": "oxeye_daisy" },
+        { "x": 1, "z": 1, "block": "water" },
+        { "x": 2, "z": 1, "block": "water" },
+        { "x": 3, "z": 1, "block": "allium" },
+        { "x": 0, "z": 2, "block": "azure_bluet" },
+        { "x": 1, "z": 2, "block": "water" },
+        { "x": 2, "z": 2, "block": "water" },
+        { "x": 3, "z": 2, "block": "cornflower" },
+        { "x": 0, "z": 3, "block": "poppy" },
+        { "x": 1, "z": 3, "block": "dandelion" },
+        { "x": 2, "z": 3, "block": "lily_of_the_valley" },
+        { "x": 3, "z": 3, "block": "poppy" }
+      ]
+    }
+  ]
+}

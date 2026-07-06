@@ -1,0 +1,246 @@
+{
+  "version": 1,
+  "description": "Pre-built index of downloadable schematics. AI can search by tags/name and auto-download.",
+  "sources": [
+    {
+      "name": "medieval_house",
+      "tags": ["medieval", "house", "wood", "stone", "cottage"],
+      "description": "A cozy medieval wooden house with stone foundation, 9x8x10",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/medieval_house.schem",
+      "format": "schem",
+      "size_estimate": "small"
+    },
+    {
+      "name": "castle_tower",
+      "tags": ["castle", "tower", "medieval", "stone", "fortress"],
+      "description": "A tall stone castle tower with battlements, 7x20x7",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/castle_tower.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "windmill",
+      "tags": ["windmill", "farm", "rural", "wood"],
+      "description": "A classic Dutch-style windmill with rotating blades, 11x18x11",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/windmill.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "japanese_shrine",
+      "tags": ["japanese", "shrine", "temple", "asian", "torii"],
+      "description": "A small Japanese shrine with torii gate, 12x9x8",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/japanese_shrine.schem",
+      "format": "schem",
+      "size_estimate": "small"
+    },
+    {
+      "name": "pirate_ship",
+      "tags": ["ship", "pirate", "boat", "ocean", "wood"],
+      "description": "A medium pirate ship with sails and cannons, 25x20x8",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/pirate_ship.schem",
+      "format": "schem",
+      "size_estimate": "large"
+    },
+    {
+      "name": "modern_house",
+      "tags": ["modern", "house", "contemporary", "glass", "concrete"],
+      "description": "A sleek modern house with flat roof and large windows, 15x7x12",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/modern_house.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "treehouse",
+      "tags": ["tree", "house", "wood", "nature", "fantasy"],
+      "description": "A fantasy treehouse built around a giant oak, 14x22x14",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/treehouse.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "blacksmith",
+      "tags": ["blacksmith", "forge", "medieval", "village", "workshop"],
+      "description": "A village blacksmith workshop with anvil and furnaces, 8x7x9",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/blacksmith.schem",
+      "format": "schem",
+      "size_estimate": "small"
+    },
+    {
+      "name": "wizard_tower",
+      "tags": ["wizard", "tower", "magic", "fantasy", "enchanting"],
+      "description": "A spiraling wizard tower with enchanting room, 9x25x9",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/wizard_tower.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "farm_barn",
+      "tags": ["farm", "barn", "rural", "animals", "hay"],
+      "description": "A red barn with hay loft and animal pens, 14x10x10",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/farm_barn.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "lighthouse",
+      "tags": ["lighthouse", "ocean", "coast", "beacon", "tower"],
+      "description": "A coastal lighthouse with spiral staircase, 7x22x7",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/lighthouse.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "tavern",
+      "tags": ["tavern", "inn", "medieval", "pub", "bar"],
+      "description": "A medieval tavern with bar counter and rooms upstairs, 12x9x10",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/tavern.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "watchtower",
+      "tags": ["watchtower", "guard", "medieval", "defense", "stone"],
+      "description": "A stone watchtower for border defense, 5x15x5",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/watchtower.schem",
+      "format": "schem",
+      "size_estimate": "small"
+    },
+    {
+      "name": "greenhouse",
+      "tags": ["greenhouse", "garden", "glass", "plants", "farm"],
+      "description": "A glass greenhouse with flower beds and crops, 10x6x8",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/greenhouse.schem",
+      "format": "schem",
+      "size_estimate": "small"
+    },
+    {
+      "name": "nether_portal_frame",
+      "tags": ["nether", "portal", "obsidian", "decoration", "frame"],
+      "description": "A decorative nether portal frame with ruined aesthetic, 9x12x3",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/nether_portal_frame.schem",
+      "format": "schem",
+      "size_estimate": "small"
+    },
+    {
+      "name": "market_stall",
+      "tags": ["market", "stall", "shop", "village", "trade"],
+      "description": "A colorful market stall with awning, 5x4x4",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/market_stall.schem",
+      "format": "schem",
+      "size_estimate": "tiny"
+    },
+    {
+      "name": "fountain",
+      "tags": ["fountain", "water", "decoration", "plaza", "park"],
+      "description": "A stone fountain with water feature for town squares, 7x5x7",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/fountain.schem",
+      "format": "schem",
+      "size_estimate": "small"
+    },
+    {
+      "name": "church",
+      "tags": ["church", "chapel", "religion", "medieval", "stone"],
+      "description": "A small stone church with bell tower and stained glass, 12x14x8",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/church.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "dock",
+      "tags": ["dock", "pier", "harbor", "ocean", "wood", "boat"],
+      "description": "A wooden dock with mooring posts and small boat, 20x5x6",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/dock.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "underground_bunker",
+      "tags": ["bunker", "underground", "military", "survival", "shelter"],
+      "description": "A hidden underground survival bunker, 10x6x10",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/underground_bunker.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "dragon_statue",
+      "tags": ["dragon", "statue", "decoration", "fantasy", "epic"],
+      "description": "A large dragon statue made of stone and obsidian, 20x18x30",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/dragon_statue.schem",
+      "format": "schem",
+      "size_estimate": "large"
+    },
+    {
+      "name": "mining_shaft",
+      "tags": ["mine", "shaft", "underground", "rails", "cave"],
+      "description": "A mine entrance with rail tracks going underground, 6x8x20",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/mining_shaft.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "suspension_bridge",
+      "tags": ["bridge", "suspension", "rope", "canyon", "crossing"],
+      "description": "A rope suspension bridge for crossing canyons, 30x8x3",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/suspension_bridge.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "mushroom_house",
+      "tags": ["mushroom", "house", "fantasy", "fairy", "cute"],
+      "description": "A whimsical mushroom-shaped house, 8x10x8",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/mushroom_house.schem",
+      "format": "schem",
+      "size_estimate": "small"
+    },
+    {
+      "name": "observatory",
+      "tags": ["observatory", "telescope", "science", "dome", "tower"],
+      "description": "An observatory with domed roof and telescope, 10x15x10",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/observatory.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "stable",
+      "tags": ["stable", "horse", "barn", "medieval", "animals"],
+      "description": "A horse stable with multiple stalls and hay storage, 14x7x8",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/stable.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "well",
+      "tags": ["well", "water", "village", "stone", "small"],
+      "description": "A simple stone well with bucket, 3x5x3",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/well.schem",
+      "format": "schem",
+      "size_estimate": "tiny"
+    },
+    {
+      "name": "campsite",
+      "tags": ["camp", "tent", "campfire", "outdoor", "survival"],
+      "description": "A wilderness campsite with tent and campfire, 8x4x8",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/campsite.schem",
+      "format": "schem",
+      "size_estimate": "tiny"
+    },
+    {
+      "name": "library",
+      "tags": ["library", "books", "enchanting", "knowledge", "medieval"],
+      "description": "A two-story library with bookshelves and reading nooks, 10x9x8",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/library.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    },
+    {
+      "name": "gatehouse",
+      "tags": ["gate", "castle", "entrance", "medieval", "defense"],
+      "description": "A fortified gatehouse with portcullis and guard rooms, 10x12x6",
+      "url": "https://raw.githubusercontent.com/TechnoVisionDev/Minecraft-Schematics/main/gatehouse.schem",
+      "format": "schem",
+      "size_estimate": "medium"
+    }
+  ]
+}

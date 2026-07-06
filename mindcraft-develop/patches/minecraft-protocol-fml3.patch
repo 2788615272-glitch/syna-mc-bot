@@ -1,0 +1,11 @@
+--- a/node_modules/minecraft-protocol/src/client/pluginChannels.js
++++ b/node_modules/minecraft-protocol/src/client/pluginChannels.js
+@@ -66,6 +66,8 @@
+   }
+ 
+   function onLoginPluginRequest (packet) {
++    // Skip fml:loginwrapper — handled by FML3 handshake code in mcdata.js
++    if (packet.channel === 'fml:loginwrapper') return
+     client.write('login_plugin_response', { // write that login plugin request is not understood, just like the Notchian client
+       messageId: packet.messageId
+     })

@@ -1,0 +1,77 @@
+{
+  "name": "cabin",
+  "description": "A small 5x5 wooden cabin with door and torch lighting",
+  "size": { "x": 5, "y": 5, "z": 5 },
+  "palette": {
+    "W": "oak_planks",
+    "L": "oak_log",
+    "D": "oak_door",
+    "G": "glass_pane",
+    "S": "oak_slab",
+    "T": "torch",
+    "F": "oak_fence",
+    ".": "air"
+  },
+  "layers": [
+    {
+      "y": 0,
+      "comment": "Floor",
+      "grid": [
+        "WWWWW",
+        "WWWWW",
+        "WWWWW",
+        "WWWWW",
+        "WWWWW"
+      ]
+    },
+    {
+      "y": 1,
+      "comment": "Walls layer 1",
+      "grid": [
+        "LWWWL",
+        "W...W",
+        "D...W",
+        "W...W",
+        "LWWWL"
+      ]
+    },
+    {
+      "y": 2,
+      "comment": "Walls layer 2 with windows",
+      "grid": [
+        "LWGWL",
+        "G...G",
+        "....W",
+        "G...G",
+        "LWGWL"
+      ]
+    },
+    {
+      "y": 3,
+      "comment": "Walls layer 3",
+      "grid": [
+        "LWWWL",
+        "W...W",
+        "W...W",
+        "W...W",
+        "LWWWL"
+      ]
+    },
+    {
+      "y": 4,
+      "comment": "Roof (slabs)",
+      "grid": [
+        "SSSSS",
+        "SSSSS",
+        "SSSSS",
+        "SSSSS",
+        "SSSSS"
+      ]
+    }
+  ],
+  "decorations": [
+    { "x": 2, "y": 2, "z": 2, "block": "crafting_table" },
+    { "x": 1, "y": 2, "z": 1, "block": "torch", "placeOn": "side" },
+    { "x": 3, "y": 2, "z": 1, "block": "torch", "placeOn": "side" }
+  ]
+}

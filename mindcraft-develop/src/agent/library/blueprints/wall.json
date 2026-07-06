@@ -1,0 +1,37 @@
+{
+  "name": "wall",
+  "description": "A defensive wall segment, 7 blocks long and 4 high with battlements",
+  "size": { "x": 7, "y": 4, "z": 1 },
+  "palette": {
+    "S": "stone_bricks",
+    "C": "cobblestone",
+    "P": "stone_brick_slab",
+    ".": "air"
+  },
+  "layers": [
+    {
+      "y": 0,
+      "grid": [
+        "SSSSSSS"
+      ]
+    },
+    {
+      "y": 1,
+      "grid": [
+        "SSSSSSS"
+      ]
+    },
+    {
+      "y": 2,
+      "grid": [
+        "SSSSSSS"
+      ]
+    },
+    {
+      "y": 3,
+      "grid": [
+        "S.S.S.S"
+      ]
+    }
+  ]
+}

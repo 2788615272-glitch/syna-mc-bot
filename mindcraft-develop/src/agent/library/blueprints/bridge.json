@@ -1,0 +1,28 @@
+{
+  "name": "bridge",
+  "description": "A simple 9-block long bridge with fence railings, 3 wide",
+  "size": { "x": 9, "y": 2, "z": 3 },
+  "palette": {
+    "W": "oak_planks",
+    "F": "oak_fence",
+    ".": "air"
+  },
+  "layers": [
+    {
+      "y": 0,
+      "grid": [
+        "WWWWWWWWW",
+        "WWWWWWWWW",
+        "WWWWWWWWW"
+      ]
+    },
+    {
+      "y": 1,
+      "grid": [
+        "FFFFFFFFF",
+        ".........",
+        "FFFFFFFFF"
+      ]
+    }
+  ]
+}

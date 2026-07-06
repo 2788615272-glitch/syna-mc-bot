@@ -1,0 +1,26 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="All Rights Reserved"
+
+[[mods]]
+modId="synabridge"
+version="0.1.0"
+displayName="SynaBridge"
+authors="Cline"
+description='''
+Bridge-first Forge mod for driving a world-native AI companion.
+'''
+
+[[dependencies.synabridge]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.synabridge]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.21)"
+ordering="NONE"
+side="BOTH"

@@ -1,0 +1,104 @@
+{
+  "name": "tower",
+  "description": "A 3x3 stone watchtower, 8 blocks tall with ladder and top platform",
+  "size": { "x": 5, "y": 8, "z": 5 },
+  "palette": {
+    "S": "stone_bricks",
+    "C": "cobblestone",
+    "L": "ladder",
+    "F": "oak_fence",
+    "T": "torch",
+    "P": "stone_brick_slab",
+    ".": "air"
+  },
+  "layers": [
+    {
+      "y": 0,
+      "grid": [
+        "SSSSS",
+        "SCSSS",
+        "SC.CS",
+        "SCSSS",
+        "SSSSS"
+      ]
+    },
+    {
+      "y": 1,
+      "grid": [
+        "S...S",
+        ".....",
+        "..L.S",
+        ".....",
+        "S...S"
+      ]
+    },
+    {
+      "y": 2,
+      "grid": [
+        "S...S",
+        ".....",
+        "..L.S",
+        ".....",
+        "S...S"
+      ]
+    },
+    {
+      "y": 3,
+      "grid": [
+        "S...S",
+        ".....",
+        "..L.S",
+        ".....",
+        "S...S"
+      ]
+    },
+    {
+      "y": 4,
+      "grid": [
+        "S...S",
+        ".....",
+        "..L.S",
+        ".....",
+        "S...S"
+      ]
+    },
+    {
+      "y": 5,
+      "grid": [
+        "S...S",
+        ".....",
+        "..L.S",
+        ".....",
+        "S...S"
+      ]
+    },
+    {
+      "y": 6,
+      "grid": [
+        "S...S",
+        ".....",
+        "..L.S",
+        ".....",
+        "S...S"
+      ]
+    },
+    {
+      "y": 7,
+      "grid": [
+        "PPPPP",
+        "PPPPP",
+        "PPPPP",
+        "PPPPP",
+        "PPPPP"
+      ]
+    }
+  ],
+  "decorations": [
+    { "x": 0, "y": 8, "z": 0, "block": "oak_fence" },
+    { "x": 4, "y": 8, "z": 0, "block": "oak_fence" },
+    { "x": 0, "y": 8, "z": 4, "block": "oak_fence" },
+    { "x": 4, "y": 8, "z": 4, "block": "oak_fence" },
+    { "x": 2, "y": 8, "z": 0, "block": "torch" },
+    { "x": 2, "y": 8, "z": 4, "block": "torch" }
+  ]
+}

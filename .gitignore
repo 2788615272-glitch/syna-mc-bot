@@ -1,0 +1,72 @@
+﻿# Local secrets and machine-specific config
+*.env
+.env*
+!*example*
+!*sample*
+*secret*
+*token*
+*password*
+*本机接入信息*
+keys.json
+**/keys.json
+**/*含Key*.txt
+**/control_config.json
+**/launcher/launcher_config.json
+**/launcher/voice_config.json
+
+# Runtime state, bot memory, logs, and generated diagnostics
+**/bots/**
+**/logs/**
+**/server_data/**
+**/results/**
+**/tmp/**
+**/wandb/**
+**/experiments/**
+**/code_records/**
+**/*.log
+**/*.jsonl
+**/*.wav
+**/*.mp3
+
+# Dependencies and caches
+**/node_modules/**
+**/.gradle/**
+**/.npm/**
+**/__pycache__/**
+**/*.pyc
+
+# Build outputs
+**/build/**
+**/out/**
+**/dist/**
+**/target/**
+**/*.class
+**/*.tmp
+**/*.TMP
+**/*.exe
+**/*.dll
+**/*.pdb
+
+# Keep intentional distributable artifacts and source examples
+!syna_mod/built-jars/
+!syna_mod/built-jars/*.jar
+!**/keys.example.json
+!**/package-lock.json
+
+# IDE/editor/system files
+.vscode/
+.idea/
+.codex/
+.codex*
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+README_SNAPSHOT.md
+LOCAL_PROGRESS.md
+MOBILITY_PLANNER_DRAFT.md
+task_board.json
+*.bak
+*.backup
+*backup*
+

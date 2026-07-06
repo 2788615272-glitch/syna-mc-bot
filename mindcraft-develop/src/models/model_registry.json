@@ -1,0 +1,27 @@
+{
+    "_comment": "模型注册表 — 添加新模型只需在此加一条，然后在 keys.json 填对应 API key",
+    "moonshot": {
+        "description": "Kimi (Moonshot AI) — kimi-k2.5 等",
+        "baseURL": "https://api.moonshot.cn/v1",
+        "apiKeyName": "MOONSHOT_API_KEY",
+        "defaultModel": "kimi-k2.5",
+        "defaultParams": {
+            "temperature": 0.6
+        },
+        "thinking": {
+            "type": "disabled"
+        }
+    },
+    "deepseek": {
+        "description": "DeepSeek V4 / DeepSeek Chat",
+        "baseURL": "https://api.deepseek.com",
+        "apiKeyName": "DEEPSEEK_API_KEY",
+        "defaultModel": "deepseek-v4-pro",
+        "defaultParams": {
+            "temperature": 0.6
+        },
+        "thinking": {
+            "type": "disabled"
+        }
+    }
+}
