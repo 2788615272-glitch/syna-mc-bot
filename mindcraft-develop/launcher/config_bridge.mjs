@@ -162,6 +162,7 @@ function findBundledModJar() {
 function readLauncherConfig() {
     const saved = readJson(launcherConfigPath, {});
     return {
+        runMode: saved.runMode === 'mod_mf' ? 'mod_mf' : 'pure_mod',
         modsDir: saved.modsDir || '',
         modJar: findBundledModJar(),
     };
@@ -169,6 +170,9 @@ function readLauncherConfig() {
 
 function saveLauncherConfig(input = {}) {
     const saved = readJson(launcherConfigPath, {});
+    if (input.runMode !== undefined) {
+        saved.runMode = input.runMode === 'mod_mf' ? 'mod_mf' : 'pure_mod';
+    }
     if (input.modsDir !== undefined) {
         saved.modsDir = String(input.modsDir || '').trim();
     }

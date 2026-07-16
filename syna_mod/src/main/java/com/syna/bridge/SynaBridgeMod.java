@@ -4,14 +4,20 @@ import com.mojang.logging.LogUtils;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.entity.EntityAttributeCreationEvent;
 import net.minecraftforge.event.entity.living.LivingDeathEvent;
+import net.minecraftforge.event.entity.living.LivingDropsEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.ServerChatEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.entity.player.PlayerDestroyItemEvent;
+import net.minecraftforge.event.entity.player.PlayerEvent.ItemCraftedEvent;
+import net.minecraftforge.event.level.BlockEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.event.server.ServerStoppedEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.ModLoadingContext;
+import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.slf4j.Logger;
 
@@ -23,8 +29,11 @@ public class SynaBridgeMod {
     private final BridgeHttpServer httpServer = new BridgeHttpServer();
 
     public SynaBridgeMod() {
+        SynaGameRules.bootstrap();
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, SynaHorrorConfig.SPEC, "synabridge-horror.toml");
         IEventBus modBus = FMLJavaModLoadingContext.get().getModEventBus();
         ModEntities.register(modBus);
+        ModItems.register(modBus);
         modBus.addListener(this::onEntityAttributes);
         MinecraftForge.EVENT_BUS.register(this);
         MinecraftForge.EVENT_BUS.register(new BotGuard());
@@ -55,6 +64,7 @@ public class SynaBridgeMod {
 
     @SubscribeEvent
     public void onServerStopped(ServerStoppedEvent event) {
+        HorrorEntityEventDirector.get().reset(event.getServer());
         httpServer.stop();
         BridgeState.get().setLastEvent("server_stopped");
     }
@@ -62,38 +72,116 @@ public class SynaBridgeMod {
     @SubscribeEvent
     public void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
+            SynaController.get().clearSessionPresence(player.server);
             BridgeState.get().bind(player);
             BridgeState.get().setLastEvent("player_login:" + player.getGameProfile().getName());
             // Push current blueprint state to the freshly-joined client so
             // their renderer doesn't have to wait for the next change tick.
             BlueprintNetwork.sendAllTo(player);
+            SynaFirstContactDirector.get().onLogin(player);
         }
     }
 
     @SubscribeEvent
     public void onPlayerLogout(PlayerEvent.PlayerLoggedOutEvent event) {
+        if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
+            SynaFirstContactDirector.get().onLogout(player);
+        }
         BridgeState.get().setLastEvent("player_logout:" + event.getEntity().getName().getString());
+    }
+
+    @SubscribeEvent
+    public void onPlayerClone(PlayerEvent.Clone event) {
+        if (event.getOriginal() instanceof net.minecraft.server.level.ServerPlayer original
+                && event.getEntity() instanceof net.minecraft.server.level.ServerPlayer replacement) {
+            SynaFirstContactDirector.get().onClone(original, replacement);
+            SynaOpeningOmenDirector.get().onClone(original, replacement);
+        }
     }
 
     @SubscribeEvent
     public void onServerChat(ServerChatEvent event) {
         net.minecraft.server.level.ServerPlayer player = event.getPlayer();
+        if (SynaTrueNameDirector.get().handleRitualSpeech(player, event.getRawText())) {
+            event.setCanceled(true);
+            return;
+        }
         boolean handled = SynaController.get().handleChatCommand(player, event.getRawText());
         if (handled) {
             event.setCanceled(true);
+            return;
         }
+        BridgeConversation.get().record(player.getGameProfile().getName(), event.getRawText());
+        SynaStoryDirector.get().onPlayerChat(player, event.getRawText());
+        SynaBoredomDirector.get().recordConversation(player);
     }
 
     @SubscribeEvent
     public void onLivingDeath(LivingDeathEvent event) {
+        if (HorrorEntityEventDirector.get().isDirectedEntity(event.getEntity())) return;
+        net.minecraft.world.entity.LivingEntity living = event.getEntity();
+        if (living.getKillCredit() instanceof net.minecraft.server.level.ServerPlayer player) {
+            SynaBoredomDirector.get().recordKill(player, living);
+            String victim = living.getType().toString();
+            if (victim.contains("ender_dragon") || victim.contains("wither") || victim.contains("warden")) {
+                SynaBoredomDirector.get().observe(player, "major_kill", victim);
+            }
+        }
         SynaController.get().onLivingEntityDeath(event.getEntity());
+    }
+
+    @SubscribeEvent
+    public void onItemCrafted(ItemCraftedEvent event) {
+        if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
+            SynaBoredomDirector.get().record(player, SynaBoredomPolicy.Activity.CRAFTING);
+        }
+    }
+
+    @SubscribeEvent
+    public void onDimensionChanged(PlayerEvent.PlayerChangedDimensionEvent event) {
+        if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
+            SynaBoredomDirector.get().record(player, SynaBoredomPolicy.Activity.DIMENSION_TRAVEL);
+            SynaBoredomDirector.get().observe(player, "dimension", event.getTo().location().toString());
+        }
+    }
+
+    @SubscribeEvent
+    public void onBlockPlaced(BlockEvent.EntityPlaceEvent event) {
+        if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
+            SynaBoredomDirector.get().recordPlacedBlock(player);
+        }
+    }
+
+    @SubscribeEvent
+    public void onLivingDrops(LivingDropsEvent event) {
+        if (HorrorEntityEventDirector.get().isDirectedEntity(event.getEntity())) event.setCanceled(true);
+    }
+
+    @SubscribeEvent
+    public void onPlayerDestroyItem(PlayerDestroyItemEvent event) {
+        SynaEpisodeDirector.get().onToolDestroyed(event);
+    }
+
+    @SubscribeEvent
+    public void onBlockBroken(BlockEvent.BreakEvent event) {
+        SynaEpisodeDirector.get().onBlockBroken(event);
     }
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase == TickEvent.Phase.END) {
             BridgeCommandQueue.get().drainAndExecute();
+            BridgeIntentQueue.get().drainAndExecute();
             SynaController.get().tick();
             SynaController.get().tickMobilityDebugHud();
+            PlayerAttentionTracker.get().tick(event.getServer());
+            HorrorEntityEventDirector.get().tick(event.getServer());
+            SynaStoryDirector.get().tick(event.getServer());
+            SynaDangerousSilenceDirector.get().tick(event.getServer());
+            SynaBoredomDirector.get().tick(event.getServer());
+            SynaEpisodeDirector.get().tick(event.getServer());
+            SynaManifestationDirector.get().tick(event.getServer());
+            SynaFirstContactDirector.get().tick(event.getServer());
+            SynaOpeningOmenDirector.get().tick(event.getServer());
             BridgeState.get().onServerTick();
             BlueprintNetwork.onServerTickEnd();
         }

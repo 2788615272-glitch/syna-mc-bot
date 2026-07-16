@@ -11,6 +11,7 @@ import net.minecraft.resources.ResourceLocation;
 
 public class AliceRenderer extends HumanoidMobRenderer<AliceEntity, AliceModel> {
     private static final ResourceLocation SYNA_TEXTURE = ResourceLocation.fromNamespaceAndPath(SynaBridgeMod.MOD_ID, "textures/entity/syna-skin.png");
+    private static final ResourceLocation HORROR_TEXTURE = ResourceLocation.fromNamespaceAndPath(SynaBridgeMod.MOD_ID, "textures/entity/syna-horror-skin.png");
 
     public AliceRenderer(EntityRendererProvider.Context context) {
         super(context, new AliceModel(context.bakeLayer(ModelLayers.PLAYER_SLIM), true), 0.5F);
@@ -18,7 +19,7 @@ public class AliceRenderer extends HumanoidMobRenderer<AliceEntity, AliceModel> 
 
     @Override
     public ResourceLocation getTextureLocation(AliceEntity entity) {
-        return SYNA_TEXTURE;
+        return entity.getHorrorStage() >= 2 ? HORROR_TEXTURE : SYNA_TEXTURE;
     }
 
     @Override

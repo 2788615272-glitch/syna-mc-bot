@@ -36,6 +36,7 @@ namespace SynaLauncherModern
     
     public class LauncherConfig
     {
+        public string runMode { get; set; }
         public string modsDir { get; set; }
         public string modJar { get; set; }
     }
@@ -86,6 +87,8 @@ namespace SynaLauncherModern
         private bool connectionReady;
         private bool applyingConfig;
         private DateTime lastMindcraftStartAt = DateTime.MinValue;
+        private bool pureModConnected;
+        private bool launcherClosing;
         private string currentPage = "";
         private ConfigSnapshot currentConfig;
 
@@ -98,6 +101,7 @@ namespace SynaLauncherModern
         private TextBox mcHost;
         private TextBox mcPort;
         private TextBox mcVersion;
+        private ComboBox runMode;
         private TextBlock mcHint;
         private TextBox modsDirBox;
         private TextBlock modHint;
@@ -131,7 +135,50 @@ namespace SynaLauncherModern
             appDir = FindAppDir();
             nodePath = FindNodePath(appDir);
             BuildUi();
-            LoadConfigAsync();
+            Closing += LauncherWindowClosing;
+            InitializeLauncherAsync();
+        }
+
+        private async void InitializeLauncherAsync()
+        {
+            try
+            {
+                string cleanup = await RunPowerShellOnceAsync("stop_syna_all.ps1", 8000);
+                if (!String.IsNullOrWhiteSpace(cleanup)) AppendLog("[启动清理] " + Compact(cleanup));
+            }
+            catch (Exception ex)
+            {
+                AppendLog("[启动清理] 清理旧 Syna 进程失败: " + FriendlyError(ex.Message));
+            }
+            await LoadConfigAsyncTask();
+        }
+
+        private void LauncherWindowClosing(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            if (launcherClosing) return;
+            launcherClosing = true;
+            StopManagedProcess(ref mindcraftProcess, "Syna Core");
+            StopManagedProcess(ref voiceProcess, "TTS 语音服务");
+            StopManagedProcess(ref asrProcess, "ASR 麦克风识别");
+            StartCleanupProcess();
+        }
+
+        private void StartCleanupProcess()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "powershell",
+                    Arguments = "-NoProfile -ExecutionPolicy Bypass -File " + Quote(Path.Combine(appDir, "stop_syna_all.ps1")),
+                    WorkingDirectory = appDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                };
+                Process.Start(psi);
+            }
+            catch { }
         }
 
         private string FindAppDir()
@@ -277,17 +324,22 @@ namespace SynaLauncherModern
                 Grid.SetColumn(card, 0);
                 grid.Children.Add(card);
                 var stack = (StackPanel)card.Child;
+                runMode = AddCombo(stack, "运行模式", "纯 Mod（推荐）", "pure_mod");
+                runMode.Items.Clear();
+                runMode.Items.Add(new ComboBoxItem { Content = "纯 Mod（推荐）", Tag = "pure_mod" });
+                runMode.Items.Add(new ComboBoxItem { Content = "Mod + Mineflayer 生存能力（实验性）", Tag = "mod_mf" });
+                runMode.SelectionChanged += RunModeChanged;
                 mcHost = AddInput(stack, "地址", "127.0.0.1");
                 mcPort = AddInput(stack, "局域网端口", "");
                 mcVersion = AddInput(stack, "版本", "auto");
                 mcHost.TextChanged += DirtyConnection;
                 mcPort.TextChanged += DirtyConnection;
                 mcVersion.TextChanged += DirtyConnection;
-                mcHint = Hint("端口为空时不允许启动。打开 Minecraft 局域网后填写显示的端口。");
+                mcHint = Hint("纯 Mod 模式检测游戏内 Syna Mod，不需要局域网端口或 Bot 登录。");
                 stack.Children.Add(mcHint);
                 stack.Children.Add(ButtonRow(new Button[] {
                     ActionButton("保存配置", SaveAllClicked, false),
-                    ActionButton("测试连接", TestConnectionClicked, true)
+                    ActionButton("测试运行环境", TestConnectionClicked, true)
                 }));
 
                 var modCard = Card("Syna Mod 安装");
@@ -379,7 +431,8 @@ namespace SynaLauncherModern
                 voiceAgent = AddInput(right, "目标 Bot", "syna");
                 voiceSender = AddInput(right, "发送者名称", "SynaMic");
                 voiceRms = AddInput(right, "麦克风阈值", "90");
-                voiceInputDevice = AddCombo(right, "麦克风设备", "默认麦克风", "");
+                voiceInputDevice = AddCombo(right, "麦克风设备（Neuro 稳定模式）", "系统默认麦克风 / 16 kHz", "");
+                voiceInputDevice.IsEnabled = false;
                 volcAppId = AddInput(right, "火山 APP ID", "");
                 right.Children.Add(Label("火山 Access Token"));
                 volcAccessToken = new PasswordBox { Height = 34, Margin = new Thickness(0, 4, 0, 14), Padding = new Thickness(10, 6, 10, 6), BorderBrush = Brush("#DDE2EA") };
@@ -391,7 +444,6 @@ namespace SynaLauncherModern
                 right.Children.Add(ButtonRow(new Button[] { ActionButton("启动TTS服务", StartTtsClicked, true), ActionButton("启动ASR识别", StartAsrClicked, false), ActionButton("停止语音服务", StopVoiceServicesClicked, false) }));
                 right.Children.Add(ButtonRow(new Button[] { ActionButton("测试TTS", TestTtsClicked, false), ActionButton("检查ASR", TestAsrClicked, false), ActionButton("刷新麦克风", ListInputDevicesClicked, false), ActionButton("转发测试文本", TestVoiceInputClicked, false) }));
                 ApplyConfig(currentConfig);
-                RefreshInputDevicesAsync(false);
                 currentPage = "voice";
             }
     
@@ -399,6 +451,10 @@ namespace SynaLauncherModern
             {
                 CaptureDraftFromControls();
                 contentHost.Children.Clear();
+                // These controls keep their history/state across page changes.
+                DetachFromParent(logBox);
+                DetachFromParent(autoScrollLog);
+                DetachFromParent(showVerboseLog);
                 var grid = new Grid();
                 grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -414,6 +470,19 @@ namespace SynaLauncherModern
                 grid.Children.Add(logBox);
                 contentHost.Children.Add(grid);
                 currentPage = "log";
+            }
+
+            private void DetachFromParent(FrameworkElement element)
+            {
+                if (element == null) return;
+                Panel oldPanel = element.Parent as Panel;
+                if (oldPanel != null)
+                {
+                    oldPanel.Children.Remove(element);
+                    return;
+                }
+                ContentControl oldContent = element.Parent as ContentControl;
+                if (oldContent != null) oldContent.Content = null;
             }
             private Grid TwoColumnGrid()
             {
@@ -540,8 +609,13 @@ namespace SynaLauncherModern
                 {
                     string output = await RunNodeAsync("launcher/config_bridge.mjs read", null, 8000);
                     var cfg = json.Deserialize<ConfigSnapshot>(output);
-                    ApplyConfig(cfg);
-                    AppendLog("已导入本机配置。");
+                    Action apply = delegate
+                    {
+                        ApplyConfig(cfg);
+                        AppendLog("已导入本机配置。");
+                    };
+                    if (Dispatcher.CheckAccess()) apply();
+                    else Dispatcher.Invoke(apply);
                 }
                 catch (Exception ex)
                 {
@@ -573,6 +647,7 @@ namespace SynaLauncherModern
                 }
                 if (cfg.launcher != null)
                 {
+                    SetComboValue(runMode, cfg.launcher.runMode, "pure_mod");
                     SetText(modsDirBox, cfg.launcher.modsDir, "");
                     if (modHint != null)
                     {
@@ -601,6 +676,7 @@ namespace SynaLauncherModern
             finally
             {
                 applyingConfig = false;
+                UpdateRunModeUi();
             }
         }
 
@@ -621,6 +697,7 @@ namespace SynaLauncherModern
                 if (mcPort != null) currentConfig.minecraft.port = mcPort.Text == null ? "" : mcPort.Text.Trim();
                 if (mcVersion != null) currentConfig.minecraft.minecraft_version = GetText(mcVersion, currentConfig.minecraft.minecraft_version ?? "auto");
                 if (currentConfig.launcher == null) currentConfig.launcher = new LauncherConfig();
+                if (runMode != null) currentConfig.launcher.runMode = GetComboValue(runMode, currentConfig.launcher.runMode ?? "pure_mod");
                 if (modsDirBox != null) currentConfig.launcher.modsDir = GetText(modsDirBox, currentConfig.launcher.modsDir ?? "");
                 return;
             }
@@ -690,6 +767,33 @@ namespace SynaLauncherModern
         {
             if (applyingConfig) return;
             SetConnectionReady(false);
+        }
+
+        private void RunModeChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (applyingConfig) return;
+            SetConnectionReady(false);
+            UpdateRunModeUi();
+        }
+
+        private bool IsPureModMode()
+        {
+            string saved = currentConfig != null && currentConfig.launcher != null ? currentConfig.launcher.runMode : "pure_mod";
+            return GetComboValue(runMode, saved) != "mod_mf";
+        }
+
+        private void UpdateRunModeUi()
+        {
+            bool needsMineflayer = !IsPureModMode();
+            if (mcHost != null) mcHost.IsEnabled = needsMineflayer;
+            if (mcPort != null) mcPort.IsEnabled = needsMineflayer;
+            if (mcVersion != null) mcVersion.IsEnabled = needsMineflayer;
+            if (mcHint != null)
+            {
+                mcHint.Text = needsMineflayer
+                    ? "实验模式需要局域网端口，Mineflayer 失败不会替代 Mod 的权威状态。"
+                    : "纯 Mod 模式只检测 127.0.0.1:8765/health，不创建 Mineflayer Bot。";
+            }
         }
 
         private async void TestTtsClicked(object sender, RoutedEventArgs e)
@@ -819,7 +923,12 @@ namespace SynaLauncherModern
         }
         private string AsrInputDeviceArg()
         {
-            string value = GetComboValue(voiceInputDevice, "");
+            return AsrInputDeviceArg("");
+        }
+
+        private string AsrInputDeviceArg(string savedDevice)
+        {
+            string value = GetComboValue(voiceInputDevice, savedDevice);
             int device;
             if (Int32.TryParse(value, out device) && device >= 0)
                 return " --input-device " + device.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -878,22 +987,47 @@ namespace SynaLauncherModern
             return items;
         }
 
-        private async Task<bool> StartAsrServiceAsync(bool showMessage)
+        private async Task<bool> StartAsrServiceAsync(bool showMessage, bool pureMod = false)
         {
             CaptureDraftFromControls();
+            VoiceConfig voice = currentConfig != null && currentConfig.voice != null
+                ? currentConfig.voice
+                : new VoiceConfig();
+            string savedMindcraftUrl = String.IsNullOrWhiteSpace(voice.mindcraftUrl) ? "http://127.0.0.1:" + mindserverPort : voice.mindcraftUrl;
+            string savedAgent = String.IsNullOrWhiteSpace(voice.defaultAgent) ? "syna" : voice.defaultAgent;
+            string savedSender = String.IsNullOrWhiteSpace(voice.senderName) ? "SynaMic" : voice.senderName;
+            string savedVoiceBaseUrl = String.IsNullOrWhiteSpace(voice.voiceBaseUrl) ? "http://127.0.0.1:8766" : voice.voiceBaseUrl;
+            string savedRms = ObjectToString(voice.rmsThreshold);
+            if (String.IsNullOrWhiteSpace(savedRms)) savedRms = "800";
+            string desiredRms = GetText(voiceRms, savedRms);
+            bool restartUnresponsiveAsr = false;
             try
             {
                 string status = await GetTextUrlAsync("http://127.0.0.1:8089/status", 1200);
-                if (status.Contains("\"micStatus\"") && Regex.IsMatch(status, @"""allInputDevices""\s*:\s*true"))
+                bool matchingRms = Regex.IsMatch(status, @"""rmsThreshold""\s*:\s*" + Regex.Escape(desiredRms) + @"(?:\D|$)");
+                bool matchingCapture = Regex.IsMatch(status, @"""captureMode""\s*:\s*""neuro_default_16k""");
+                bool matchingPtt = Regex.IsMatch(status, @"""pttMode""\s*:\s*true");
+                bool matchingPureMod = Regex.IsMatch(status, @"""pureMod""\s*:\s*" + (pureMod ? "true" : "false"));
+                bool streamHealthy = Regex.IsMatch(status, @"""healthy""\s*:\s*true");
+                if (status.Contains("\"micStatus\"") && matchingRms && matchingCapture && matchingPtt && matchingPureMod && streamHealthy)
                 {
                     AppendLog("[Voice] ASR online: " + Compact(status));
                     if (voiceHint != null) voiceHint.Text = "ASR speech recognition service is online.";
                     return true;
                 }
-                AppendLog("[Voice] Old ASR instance detected; starting a fresh all-device ASR.");
+                AppendLog("[Voice] ASR 参数与当前配置不一致；正在重启服务。");
                 await RunPowerShellOnceAsync("stop_syna_asr.ps1", 4000);
             }
-            catch { }
+            catch
+            {
+                AppendLog("[Voice] ASR 控制端点无响应；正在清理残留进程并重新启动。");
+                restartUnresponsiveAsr = true;
+            }
+            if (restartUnresponsiveAsr)
+            {
+                await RunPowerShellOnceAsync("stop_syna_asr.ps1", 6000);
+                asrProcess = null;
+            }
 
             if (asrProcess != null && !asrProcess.HasExited)
             {
@@ -901,20 +1035,21 @@ namespace SynaLauncherModern
                 return true;
             }
 
-            string inputDeviceArg = AsrInputDeviceArg();
             string args = "services/syna_asr_server.py"
-                + " --mindcraft-url " + Quote(GetText(voiceMindcraftUrl, "http://127.0.0.1:" + mindserverPort))
-                + " --default-agent " + Quote(GetText(voiceAgent, "syna"))
-                + " --sender-name " + Quote(GetText(voiceSender, "SynaMic"))
-                + " --voice-base-url " + Quote(GetText(voiceBaseUrl, "http://127.0.0.1:8766"))
-                + " --rms-threshold " + GetText(voiceRms, "90")
+                + " --mindcraft-url " + Quote(GetText(voiceMindcraftUrl, savedMindcraftUrl))
+                + " --default-agent " + Quote(GetText(voiceAgent, savedAgent))
+                + " --sender-name " + Quote(GetText(voiceSender, savedSender))
+                + " --voice-base-url " + Quote(GetText(voiceBaseUrl, savedVoiceBaseUrl))
+                + " --rms-threshold " + desiredRms
                 + " --max-recording-seconds 8"
-                + inputDeviceArg
-                + (String.IsNullOrWhiteSpace(inputDeviceArg) ? " --all-input-devices" : "")
-                + " --always-listen"
-                + " --volc-app-id " + Quote(GetText(volcAppId, ""))
-                + " --volc-access-token " + Quote(volcAccessToken == null ? "" : volcAccessToken.Password)
-                + " --volc-asr-resource-id " + Quote(GetText(volcAsrResourceId, "volc.seedasr.sauc.duration"));
+                + " --sample-rate 16000"
+                + " --chunk-size 512"
+                + " --neuro-capture"
+                + " --push-to-talk"
+                + (pureMod ? " --pure-mod" : "")
+                + " --volc-app-id " + Quote(GetText(volcAppId, voice.volcAppId ?? ""))
+                + " --volc-access-token " + Quote(volcAccessToken == null ? (voice.volcAccessToken ?? "") : volcAccessToken.Password)
+                + " --volc-asr-resource-id " + Quote(GetText(volcAsrResourceId, String.IsNullOrWhiteSpace(voice.volcAsrResourceId) ? "volc.seedasr.sauc.duration" : voice.volcAsrResourceId));
             asrProcess = StartPythonProcess("ASR", args);
             if (voiceHint != null) voiceHint.Text = "正在启动 ASR 麦克风识别...";
             await Task.Delay(2500);
@@ -922,7 +1057,7 @@ namespace SynaLauncherModern
             {
                 string status = await GetTextUrlAsync("http://127.0.0.1:8089/status", 2500);
                 AppendLog("[Voice] ASR 启动成功: " + Compact(status));
-                if (voiceHint != null) voiceHint.Text = "ASR 已启动。对麦克风说话，识别后会转发给 bot。";
+                if (voiceHint != null) voiceHint.Text = "ASR 已启动。按住 V 说话，松开 V 后识别并发送。";
                 return true;
             }
             catch (Exception ex)
@@ -1168,7 +1303,9 @@ namespace SynaLauncherModern
             sb.Append("\"minecraft_version\":").Append(JsonString(GetText(mcVersion, savedVersion)));
             sb.Append("},");
             string savedModsDir = currentConfig != null && currentConfig.launcher != null ? currentConfig.launcher.modsDir : "";
+            string savedRunMode = currentConfig != null && currentConfig.launcher != null ? currentConfig.launcher.runMode : "pure_mod";
             sb.Append("\"launcher\":{");
+            sb.Append("\"runMode\":").Append(JsonString(GetComboValue(runMode, savedRunMode))).Append(',');
             sb.Append("\"modsDir\":").Append(JsonString(GetText(modsDirBox, savedModsDir)));
             sb.Append("},");
             sb.Append("\"model\":{");
@@ -1242,6 +1379,35 @@ namespace SynaLauncherModern
         private async void TestConnectionClicked(object sender, RoutedEventArgs e)
         {
             await SaveAllAsync(false);
+            if (IsPureModMode())
+            {
+                try
+                {
+                    mcHint.Text = "正在检测 Syna Mod...";
+                    string health = await GetTextUrlAsync("http://127.0.0.1:8765/health", 2000);
+                    if (!health.Contains("\"ok\":true")) throw new Exception("Mod health response was invalid.");
+                    if (!Regex.IsMatch(health, @"""protocol""\s*:\s*2"))
+                        throw new Exception("Syna Mod protocol is outdated.");
+                    string events = await GetTextUrlAsync("http://127.0.0.1:8765/events?after=0", 2000);
+                    if (!events.Contains("\"events\"")) throw new Exception("Mod events response was invalid.");
+                    string inputProbe = await PostJsonAsync("http://127.0.0.1:8765/input", "{\"player\":\"LauncherProbe\",\"text\":\"[probe]\"}", 2000);
+                    if (!inputProbe.Contains("\"accepted\":true")) throw new Exception("Mod input response was invalid.");
+                    mcHint.Text = "Syna Mod 已连接，可以启动纯 Mod Core。";
+                    SetConnectionReady(true);
+                    AppendLog("Syna Mod 连接测试成功。Mineflayer 保持关闭。");
+                }
+                catch (Exception ex)
+                {
+                    bool outdated = ex.Message.Contains("404") || ex.Message.Contains("未找到")
+                        || ex.Message.Contains("protocol is outdated");
+                    mcHint.Text = outdated
+                        ? "当前游戏加载的是旧版 Syna Mod。请更新 Mod 后完全重启 Minecraft。"
+                        : "未检测到 Syna Mod。请先进入安装了 Mod 的世界。";
+                    SetConnectionReady(false);
+                    AppendLog("Syna Mod 连接失败: " + FriendlyError(ex.Message));
+                }
+                return;
+            }
             int port;
             if (!Int32.TryParse(GetText(mcPort, ""), out port) || port < 1 || port > 65535)
             {
@@ -1285,20 +1451,21 @@ namespace SynaLauncherModern
             }
             if (mindcraftProcess != null && !mindcraftProcess.HasExited)
             {
-                AppendLog("Mindcraft 已经在运行。");
+                AppendLog("Syna Core 已经在运行。");
                 return;
             }
             await SaveAllAsync(false);
+            bool pureMod = IsPureModMode();
             if (currentConfig != null && currentConfig.voice != null && currentConfig.voice.enabled)
             {
                 AppendLog("正在启动语音服务...");
                 await StartTtsServiceAsync(false);
-                await StartAsrServiceAsync(false);
+                await StartAsrServiceAsync(false, pureMod);
             }
             var psi = new ProcessStartInfo
             {
                 FileName = nodePath,
-                Arguments = "main.js",
+                Arguments = pureMod ? "src/core/pure_mod_core.js" : "main.js",
                 WorkingDirectory = appDir,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -1307,18 +1474,32 @@ namespace SynaLauncherModern
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8
             };
+            pureModConnected = false;
             mindcraftProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            mindcraftProcess.OutputDataReceived += delegate(object s, DataReceivedEventArgs ev) { if (ev.Data != null) AppendLog(ev.Data); };
+            mindcraftProcess.OutputDataReceived += delegate(object s, DataReceivedEventArgs ev)
+            {
+                if (ev.Data == null) return;
+                AppendLog(ev.Data);
+                if (pureMod && !pureModConnected && ev.Data.Contains("[PureModCore] connected to"))
+                {
+                    pureModConnected = true;
+                    Dispatcher.BeginInvoke((Action)delegate
+                    {
+                        statusText.Text = "运行中（纯 Mod）";
+                        AppendLog("纯 Mod Core 连接成功。本模式无需启动 Mineflayer。");
+                    });
+                }
+            };
             mindcraftProcess.ErrorDataReceived += delegate(object s, DataReceivedEventArgs ev) { if (ev.Data != null) AppendLog(ev.Data); };
-            mindcraftProcess.Exited += delegate { Dispatcher.BeginInvoke((Action)delegate { statusText.Text = "已停止"; SetConnectionReady(true); if (stopButton != null) stopButton.IsEnabled = false; AppendLog("Mindcraft 已退出。"); }); };
+            mindcraftProcess.Exited += delegate { Dispatcher.BeginInvoke((Action)delegate { statusText.Text = "已停止"; SetConnectionReady(true); if (stopButton != null) stopButton.IsEnabled = false; AppendLog("Syna Core 已退出。"); }); };
             mindcraftProcess.Start();
             lastMindcraftStartAt = DateTime.Now;
             mindcraftProcess.BeginOutputReadLine();
             mindcraftProcess.BeginErrorReadLine();
-            statusText.Text = "正在运行";
+            statusText.Text = pureMod ? "正在连接纯 Mod Core" : "正在运行";
             startButton.IsEnabled = false;
             if (stopButton != null) stopButton.IsEnabled = false;
-            AppendLog("Mindcraft 已启动。");
+            AppendLog(pureMod ? "纯 Mod Core 进程已启动，正在连接 Syna Mod……" : "Mod + Mineflayer 模式已启动。");
             await Task.Delay(3000);
             if (mindcraftProcess != null && !mindcraftProcess.HasExited && stopButton != null) stopButton.IsEnabled = true;
         }
@@ -1331,9 +1512,10 @@ namespace SynaLauncherModern
                 return;
             }
             if (stopButton != null) stopButton.IsEnabled = false;
-            AppendLog("正在停止 Mindcraft 和所有 Bot...");
+            bool pureMod = IsPureModMode();
+            AppendLog(pureMod ? "正在停止纯 Mod Core..." : "正在停止 Mindcraft 和所有 Bot...");
             bool shutdownRequested = false;
-            try
+            if (!pureMod) try
             {
                 string url = "http://localhost:" + mindserverPort + "/api/shutdown";
                 string result = await PostJsonAsync(url, "{}", 3000);
@@ -1351,7 +1533,7 @@ namespace SynaLauncherModern
                 if (mindcraftProcess != null && !mindcraftProcess.HasExited)
                 {
                     mindcraftProcess.Kill();
-                    AppendLog("本地 Mindcraft 进程已强制结束。已有正常退出时会自动忽略这一步。");
+                    AppendLog("本地 Syna Core 进程已结束。");
                 }
                 else if (!shutdownRequested)
                 {
@@ -1377,6 +1559,11 @@ namespace SynaLauncherModern
 
         private void OpenConsole()
         {
+            if (IsPureModMode())
+            {
+                AppendLog("纯 Mod 模式暂不启动 MindServer 网页控制台，请使用日志页查看状态。");
+                return;
+            }
             try { Process.Start(new ProcessStartInfo { FileName = "http://localhost:" + mindserverPort + "/", UseShellExecute = true }); }
             catch (Exception ex) { AppendLog("打开控制台失败: " + ex.Message); }
         }

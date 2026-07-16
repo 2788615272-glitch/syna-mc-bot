@@ -30,6 +30,10 @@ function describeHorror(state) {
     const target = String(horror.target || '');
     const targetKind = String(horror.targetKind || 'none');
     const seconds = Number(horror.countdownSeconds || 0);
+    const beat = String(horror.beat || 'dormant');
+    const omenLevel = Number(horror.omenLevel || 0);
+    const episodeId = Number(horror.episodeId || 0);
+    const lastOutcome = String(horror.lastOutcome || 'none');
     const awaitingConfession = Boolean(horror.awaitingConfession);
     const angerKey = String(horror.angerKey || "");
     const challengeKind = String(horror.challengeKind || 'none');
@@ -41,19 +45,36 @@ function describeHorror(state) {
     const active = stage !== 'calm'
         || anger > 0
         || Boolean(attack)
-        || lastEvent.startsWith('horror_')
+        || beat === 'aftermath'
         || lastEvent.startsWith('voice_focus:');
     if (!active) return null;
 
     const parts = [
         `[Syna second form state] form=${form}`,
         `stage=${stage}`,
+        `beat=${beat}`,
+        `omenLevel=${omenLevel}`,
+        `episodeId=${episodeId}`,
+        `lastOutcome=${lastOutcome}`,
         `anger=${anger}`,
         `target=${target || 'none'}`,
         `targetKind=${targetKind}`,
         `lastEvent=${lastEvent}`,
     ];
     if (seconds > 0) parts.push(`countdownSeconds=${seconds}`);
+    if (beat === 'withdrawal') {
+        parts.push('Play the withdrawal beat: become quieter and colder. Give at most one restrained warning; do not explain the horror system and do not transform immediately.');
+    } else if (beat === 'omens') {
+        parts.push('Play the omen beat: use a short unsettling observation or deliberate silence. Let the world effect carry the moment; do not announce that an omen occurred.');
+    } else if (beat === 'confrontation') {
+        parts.push('Play the confrontation beat now. Ask the target what they think they did wrong. If no anger key exists, set one from the real remembered grievance before asking.');
+    } else if (beat === 'countdown') {
+        parts.push('Play the countdown beat: state one clear rule or one concrete path to mercy. Keep the wording short and do not expose numeric anger thresholds.');
+    } else if (beat === 'pursuit') {
+        parts.push('Play the pursuit beat: use rare, terse lines. Do not narrate navigation or repeatedly threaten the target.');
+    } else if (beat === 'aftermath') {
+        parts.push('Play one restrained aftermath callback, then return to normal behavior. Do not restart the pursuit.');
+    }
     if (awaitingConfession) parts.push(`You are waiting for the player to answer: "What did you do wrong?" AngerKey=${angerKey || "unset"}. If they guess wrong, call !synaHorror("guess", "", 0, "their answer") so the form keeps hunting; if they guess right, the mod will calm down.`);
     if (challengeKind !== 'none') {
         parts.push(`Active mercy challenge: kind=${challengeKind}, target=${challengeTarget || 'unset'}, clue=${challengeClue || 'unset'}, progress=${challengeProgress}/${challengeRequired}, secondsLeft=${challengeSeconds}. Do not forgive just because the player asks; wait for mod progress/completion or choose to stop with !synaHorror("forgive").`);
@@ -81,6 +102,7 @@ export async function attachHorrorAwareness(agent) {
     let lastSignature = '';
     let lastInjectedAt = 0;
     let lastAttackHandled = '';
+    let lastStoryHandled = '';
 
     async function poll() {
         try {
@@ -89,7 +111,7 @@ export async function attachHorrorAwareness(agent) {
             if (!msg) return;
             const horror = state?.syna?.horror || {};
             const lastEvent = String(state?.lastEvent || '');
-            const signature = `${lastEvent}|${horror.form || ''}|${horror.stage || ''}|${horror.anger || 0}|${horror.target || ''}|${horror.countdownTicks || 0}|${horror.challengeKind || ''}|${horror.challengeProgress || 0}|${horror.challengeTicks || 0}`;
+            const signature = `${lastEvent}|${horror.form || ''}|${horror.stage || ''}|${horror.beat || ''}|${horror.omenLevel || 0}|${horror.anger || 0}|${horror.target || ''}|${horror.countdownTicks || 0}|${horror.challengeKind || ''}|${horror.challengeProgress || 0}|${horror.challengeTicks || 0}`;
             const now = Date.now();
             if (signature !== lastSignature || now - lastInjectedAt >= 30000) {
                 lastSignature = signature;
@@ -104,6 +126,14 @@ export async function attachHorrorAwareness(agent) {
                 if (settings.horror_awareness?.log) console.log('[HorrorAwareness] handling attack:', lastEvent);
                 setTimeout(() => {
                     agent.handleMessage('system', `[ATTACK EVENT] ${msg}`).catch(() => {});
+                }, 0);
+            }
+            const shouldAdvanceStory = lastEvent.startsWith('horror_omen:confrontation:')
+                || lastEvent.startsWith('horror_omen:rule_given:');
+            if (shouldAdvanceStory && lastEvent !== lastStoryHandled) {
+                lastStoryHandled = lastEvent;
+                setTimeout(() => {
+                    agent.handleMessage('system', `[HORROR STORY BEAT] ${msg}`).catch(() => {});
                 }, 0);
             }
         } catch (_) {

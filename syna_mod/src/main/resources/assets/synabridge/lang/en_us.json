@@ -1,4 +1,6 @@
 {
   "key.categories.synabridge": "Syna Bridge",
-  "key.synabridge.toggle_ghost": "Toggle Blueprint Ghost"
+  "key.synabridge.toggle_ghost": "Toggle Blueprint Ghost",
+  "item.synabridge.syna_fragment": "Syna's Fragment",
+  "item.synabridge.syna_fragment.hint": "The writing changes when she grows bored."
 }

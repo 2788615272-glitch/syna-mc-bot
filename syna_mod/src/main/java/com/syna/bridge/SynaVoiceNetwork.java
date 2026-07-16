@@ -7,12 +7,13 @@ import net.minecraftforge.network.NetworkEvent;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
+import net.minecraft.server.level.ServerPlayer;
 
 import java.util.function.Supplier;
 
 /** Broadcasts Syna voice playback events to every modded client. */
 public final class SynaVoiceNetwork {
-    public static final String PROTOCOL_VERSION = "3";
+    public static final String PROTOCOL_VERSION = "4";
     public static final ResourceLocation CHANNEL_ID =
             new ResourceLocation(SynaBridgeMod.MOD_ID, "voice");
     private static final int MAX_AUDIO_BYTES = 1024 * 1024;
@@ -32,6 +33,11 @@ public final class SynaVoiceNetwork {
                 .decoder(S2CVoicePlay::decode)
                 .consumerMainThread(S2CVoicePlay::handle)
                 .add();
+        CHANNEL.messageBuilder(S2COpeningOmen.class, id++, NetworkDirection.PLAY_TO_CLIENT)
+                .encoder(S2COpeningOmen::encode)
+                .decoder(S2COpeningOmen::decode)
+                .consumerMainThread(S2COpeningOmen::handle)
+                .add();
         SynaBridgeMod.LOGGER.info("[SynaVoiceNetwork] channel registered ({} packet types)", id);
     }
 
@@ -48,6 +54,39 @@ public final class SynaVoiceNetwork {
         SynaBridgeMod.LOGGER.info("[SynaVoiceNetwork] broadcasting voice id={} speaker={} interrupt={} generation={} inlineBytes={} urlFallback={}",
                 voiceId, speaker, interrupt, generation, Math.min(safeAudio.length, MAX_AUDIO_BYTES), url != null && !url.isBlank());
         CHANNEL.send(PacketDistributor.ALL.noArg(), new S2CVoicePlay(voiceId, speaker, text, url, safeAudio, interrupt, generation));
+    }
+
+    public static void sendOpeningOmen(ServerPlayer player, int phase, int durationTicks) {
+        if (player == null) return;
+        CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
+                new S2COpeningOmen(phase, durationTicks));
+    }
+
+    public static final class S2COpeningOmen {
+        public final int phase;
+        public final int durationTicks;
+
+        public S2COpeningOmen(int phase, int durationTicks) {
+            this.phase = Math.max(1, Math.min(2, phase));
+            this.durationTicks = Math.max(1, Math.min(20 * 10, durationTicks));
+        }
+
+        public static void encode(S2COpeningOmen packet, FriendlyByteBuf buffer) {
+            buffer.writeVarInt(packet.phase);
+            buffer.writeVarInt(packet.durationTicks);
+        }
+
+        public static S2COpeningOmen decode(FriendlyByteBuf buffer) {
+            return new S2COpeningOmen(buffer.readVarInt(), buffer.readVarInt());
+        }
+
+        public static void handle(S2COpeningOmen packet, Supplier<NetworkEvent.Context> contextSupplier) {
+            NetworkEvent.Context context = contextSupplier.get();
+            if (net.minecraftforge.fml.loading.FMLEnvironment.dist == net.minecraftforge.api.distmarker.Dist.CLIENT) {
+                com.syna.bridge.client.SynaOpeningOmenClient.trigger(packet.phase, packet.durationTicks);
+            }
+            context.setPacketHandled(true);
+        }
     }
 
     public static final class S2CVoicePlay {

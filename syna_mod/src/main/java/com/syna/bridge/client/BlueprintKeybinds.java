@@ -17,8 +17,7 @@ import org.lwjgl.glfw.GLFW;
  */
 public final class BlueprintKeybinds {
     public static final String CATEGORY = "key.categories." + SynaBridgeMod.MOD_ID;
-    private static final long VOICE_FOCUS_COOLDOWN_MS = 1500L;
-    private static long lastVoiceFocusSentAt = 0L;
+    private static boolean voiceKeyWasDown = false;
 
     public static final KeyMapping TOGGLE_GHOST = new KeyMapping(
             "key." + SynaBridgeMod.MOD_ID + ".toggle_ghost",
@@ -63,18 +62,31 @@ public final class BlueprintKeybinds {
                 }
             }
 
-            while (VOICE_FOCUS.consumeClick()) {
-                Minecraft mc = Minecraft.getInstance();
-                if (mc.player != null && mc.getConnection() != null) {
-                    long now = System.currentTimeMillis();
-                    if (now - lastVoiceFocusSentAt < VOICE_FOCUS_COOLDOWN_MS) {
-                        SynaVoiceFocusOverlay.markFocused();
-                        continue;
-                    }
-                    lastVoiceFocusSentAt = now;
-                    mc.player.displayClientMessage(Component.literal("[Syna] voice focus armed"), true);
-                    SynaVoiceFocusOverlay.markFocused();
-                    mc.getConnection().sendChat("syna focus");
+        }
+
+        @SubscribeEvent
+        public static void onClientTick(net.minecraftforge.event.TickEvent.ClientTickEvent event) {
+            if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) {
+                return;
+            }
+
+            Minecraft mc = Minecraft.getInstance();
+            boolean keyDown = mc.player != null && mc.getConnection() != null && VOICE_FOCUS.isDown();
+            if (keyDown == voiceKeyWasDown) {
+                return;
+            }
+            voiceKeyWasDown = keyDown;
+
+            if (keyDown) {
+                SynaVoiceFocusOverlay.setRecording(true);
+                mc.player.displayClientMessage(Component.literal("[Syna] 正在录音，松开 V 发送"), true);
+                mc.getConnection().sendChat("syna focus");
+                SynaPushToTalkClient.start();
+            } else {
+                SynaVoiceFocusOverlay.setRecording(false);
+                SynaPushToTalkClient.stop();
+                if (mc.player != null) {
+                    mc.player.displayClientMessage(Component.literal("[Syna] 语音已发送"), true);
                 }
             }
         }

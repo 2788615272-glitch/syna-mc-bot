@@ -1,5 +1,8 @@
 package com.syna.bridge;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+
 import com.syna.bridge.mobility.MobilitySnapshot;
 import com.syna.bridge.mobility.MobilityRequest;
 import com.syna.bridge.mobility.MobilitySystem;
@@ -48,10 +51,19 @@ import com.mojang.datafixers.util.Pair;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 
 public final class SynaController {
+    private static final Set<String> FORBIDDEN_GIFT_IDS = Set.of(
+            "synabridge:syna_fragment",
+            "minecraft:air", "minecraft:bedrock", "minecraft:barrier",
+            "minecraft:command_block", "minecraft:chain_command_block", "minecraft:repeating_command_block",
+            "minecraft:structure_block", "minecraft:structure_void", "minecraft:jigsaw",
+            "minecraft:light", "minecraft:debug_stick", "minecraft:knowledge_book",
+            "minecraft:end_portal_frame", "minecraft:spawner"
+    );
     private enum MobilityMode {
         IDLE,
         PATHING_TO_ANCHOR,
@@ -186,6 +198,7 @@ public final class SynaController {
     private boolean hiddenSynaWasNoPhysics;
     private boolean hiddenSynaWasCustomNameVisible;
     private String currentTask = "idle";
+    private boolean horrorFxEnabled = true;
     private BlockPos moveTarget;
     private UUID followPlayerUuid;
     private UUID mobilityTargetPlayerUuid;
@@ -280,11 +293,16 @@ public final class SynaController {
         }
 
         horrorState.tick(syna);
+        syna.setHorrorFxEnabled(horrorFxEnabled);
         if (horrorState.isActive()) {
             keepOriginalSynaPlayerHidden();
         } else {
             restoreOriginalSynaPlayer("horror_inactive");
-            syna.setCustomName(Component.literal("Alice"));
+            syna.setCustomName(null);
+            syna.setCustomNameVisible(false);
+            if (syna.getHorrorStage() != 0) {
+                syna.setHorrorState(0, 0, "", "");
+            }
         }
         if (horrorState.isHunting()) {
             return;
@@ -543,7 +561,7 @@ public final class SynaController {
 
         switch (command.type()) {
             case "say" -> say(server, command.text());
-            case "announce_join" -> announce(server, "[系统] Syna 进入了世界", "announce_join");
+            case "announce_join" -> BridgeState.get().setLastEvent("announce_join_ignored");
             case "announce_leave" -> announce(server, "[系统] Syna 暂时离开了世界", "announce_leave");
             case "bind_first_player" -> bindFirstPlayer(server);
             case "spawn_syna" -> spawnNearBoundPlayer();
@@ -555,11 +573,180 @@ public final class SynaController {
             case "collect_wood" -> collectWood(command.count());
             case "collect_stone" -> collectStone(command.count());
             case "craft_item" -> craftItem(command.item(), command.count());
+            case "give_item" -> giveItem(command.player(), command.item(), command.count());
             case "escape_to_anchor" -> escapeToAnchor();
             case "horror" -> horror(command.text(), command.player(), command.count(), command.seconds(), command.item(), command.reason(), command.owner());
+            case "story" -> SynaStoryDirector.get().command(server, command.text(), command.player(), command.reason());
             case "focus_voice" -> focusVoice(command.player());
             case "stop" -> stop();
             default -> BridgeState.get().setLastEvent("unknown_command:" + command.type());
+        }
+    }
+
+    public JsonObject executeIntent(JsonObject request) {
+        String intent = jsonText(request, "intent");
+        String playerName = jsonText(request, "player");
+        String requestReason = jsonText(request, "reason");
+        JsonObject args = request.has("args") && request.get("args").isJsonObject()
+                ? request.getAsJsonObject("args") : new JsonObject();
+        String result;
+        boolean accepted = true;
+
+        switch (intent == null ? "" : intent) {
+            case "none" -> result = "no_action";
+            case "manifest" -> {
+                ServerPlayer player = findPlayerByName(playerName);
+                if (player != null) BridgeState.get().bind(player);
+                accepted = spawnNearBoundPlayer();
+                result = accepted ? "manifested" : "manifest_failed";
+            }
+            case "leave" -> {
+                despawn();
+                result = getSyna() == null ? "left" : "leave_failed";
+                accepted = getSyna() == null;
+            }
+            case "give_item" -> {
+                giveItem(playerName, jsonText(args, "item"), jsonInt(args, "count", 1));
+                result = BridgeState.get().getLastEvent();
+                accepted = result.startsWith("give_item:");
+            }
+            case "disable_horror_fx" -> {
+                setHorrorFxEnabled(false);
+                result = "horror_fx_disabled";
+            }
+            case "enable_horror_fx" -> {
+                setHorrorFxEnabled(true);
+                result = "horror_fx_enabled";
+            }
+            case "set_horror_stage" -> {
+                String stage = jsonText(args, "stage");
+                if (!"explicit_calm_request".equals(requestReason) || !"calm".equalsIgnoreCase(stage)) {
+                    accepted = false;
+                    result = "director_only_horror_stage";
+                    break;
+                }
+                String action = switch (stage == null ? "" : stage.toLowerCase(java.util.Locale.ROOT)) {
+                    case "calm" -> "forgive";
+                    case "warning" -> "warn";
+                    case "countdown" -> "countdown";
+                    case "hunting" -> "hunt";
+                    default -> null;
+                };
+                if (action == null) {
+                    accepted = false;
+                    result = "unsupported_horror_stage";
+                } else if (!"forgive".equals(action) && getSyna() == null) {
+                    spawnNearBoundPlayer();
+                    horror(action, playerName, null, null, null, "llm_authorized_stage_change", null);
+                    result = BridgeState.get().getLastEvent();
+                    accepted = getSyna() != null;
+                } else {
+                    horror(action, playerName, null, null, null, "llm_authorized_stage_change", null);
+                    result = BridgeState.get().getLastEvent();
+                }
+            }
+            case "start_game" -> {
+                String kind = jsonText(args, "kind");
+                if (!"explicit_game_request".equals(requestReason)) {
+                    accepted = false;
+                    result = "explicit_game_request_required";
+                    break;
+                }
+                if (getSyna() == null) spawnNearBoundPlayer();
+                if ("riddle".equals(kind)) {
+                    horror("challenge_block", playerName, 1, 120, "minecraft:coal", "我藏在黑暗里，也把火焰留给你。把我丢给 Syna。", null);
+                } else if ("hunt".equals(kind)) {
+                    horror("challenge_kill", playerName, 3, 180, "minecraft:zombie", "猎杀 3 只僵尸。", null);
+                } else {
+                    accepted = false;
+                }
+                result = accepted ? BridgeState.get().getLastEvent() : "unsupported_game";
+            }
+            case "light_hit" -> {
+                accepted = false;
+                result = "director_only_light_hit";
+            }
+            case "prove_presence" -> {
+                if (!"explicit_power_dare".equals(requestReason)) {
+                    accepted = false;
+                    result = "explicit_power_dare_required";
+                    break;
+                }
+                JsonObject proofReceipt = SynaPresenceProofDirector.execute(findPlayerByName(playerName));
+                proofReceipt.addProperty("intent", "prove_presence");
+                BridgeState.get().setLastAction("prove_presence:"
+                        + proofReceipt.get("result").getAsString()
+                        + ":accepted=" + proofReceipt.get("accepted").getAsBoolean());
+                return proofReceipt;
+            }
+            case "schedule_dangerous_silence" -> {
+                if (!"repeated_true_name_probe".equals(requestReason)) {
+                    accepted = false;
+                    result = "repeated_true_name_probe_required";
+                    break;
+                }
+                JsonObject silenceReceipt = SynaDangerousSilenceDirector.get()
+                        .schedule(findPlayerByName(playerName));
+                silenceReceipt.addProperty("intent", "schedule_dangerous_silence");
+                BridgeState.get().setLastAction("schedule_dangerous_silence:"
+                        + silenceReceipt.get("result").getAsString()
+                        + ":accepted=" + silenceReceipt.get("accepted").getAsBoolean());
+                return silenceReceipt;
+            }
+            case "record_identity_disclosure" -> {
+                if (!"validated_identity_reply".equals(requestReason)) {
+                    accepted = false;
+                    result = "validated_identity_reply_required";
+                    break;
+                }
+                MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+                JsonObject loreReceipt = SynaIdentityLoreDirector.record(server,
+                        jsonText(args, "topic"), jsonInt(args, "version", 0));
+                loreReceipt.addProperty("intent", "record_identity_disclosure");
+                BridgeState.get().setLastAction("record_identity_disclosure:"
+                        + loreReceipt.get("result").getAsString()
+                        + ":accepted=" + loreReceipt.get("accepted").getAsBoolean());
+                return loreReceipt;
+            }
+            case "record_first_contact" -> {
+                if (!"validated_first_contact_reply".equals(requestReason)) {
+                    accepted = false;
+                    result = "validated_first_contact_reply_required";
+                    break;
+                }
+                JsonObject firstContactReceipt = SynaFirstContactDirector.get()
+                        .recordCompleted(findPlayerByName(playerName));
+                firstContactReceipt.addProperty("intent", "record_first_contact");
+                return firstContactReceipt;
+            }
+            default -> {
+                accepted = false;
+                result = "unsupported_intent";
+            }
+        }
+
+        JsonObject receipt = new JsonObject();
+        receipt.addProperty("accepted", accepted);
+        receipt.addProperty("completed", accepted);
+        receipt.addProperty("result", result);
+        receipt.addProperty("intent", intent == null ? "" : intent);
+        BridgeState.get().setLastAction((intent == null ? "" : intent) + ":" + result
+                + ":accepted=" + accepted);
+        return receipt;
+    }
+
+    private static String jsonText(JsonObject object, String key) {
+        if (object == null) return null;
+        JsonElement value = object.get(key);
+        return value == null || value.isJsonNull() ? null : value.getAsString();
+    }
+
+    private static int jsonInt(JsonObject object, String key, int fallback) {
+        try {
+            JsonElement value = object == null ? null : object.get(key);
+            return value == null || value.isJsonNull() ? fallback : value.getAsInt();
+        } catch (Exception ignored) {
+            return fallback;
         }
     }
 
@@ -576,6 +763,59 @@ public final class SynaController {
             }
         }
         return null;
+    }
+
+    private void giveItem(String playerName, String itemName, Integer requestedCount) {
+        MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+        ServerPlayer player = findPlayerByName(playerName);
+        if (player == null && server != null && !server.getPlayerList().getPlayers().isEmpty()) {
+            player = server.getPlayerList().getPlayers().get(0);
+        }
+        if (player == null || itemName == null) {
+            BridgeState.get().setLastEvent("give_item_failed:invalid_request");
+            return;
+        }
+        String normalizedId = itemName.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!normalizedId.contains(":")) normalizedId = "minecraft:" + normalizedId;
+        ResourceLocation itemId = ResourceLocation.tryParse(normalizedId);
+        Item item = itemId == null ? null : ForgeRegistries.ITEMS.getValue(itemId);
+        if (item == null || item == Items.AIR || isForbiddenGift(itemId)) {
+            BridgeState.get().setLastEvent("give_item_failed:not_allowed:" + safeEventToken(itemName));
+            return;
+        }
+        int max = Math.max(1, Math.min(16, item.getMaxStackSize()));
+        int count = Math.max(1, Math.min(max, requestedCount == null ? 1 : requestedCount));
+        BridgeState.get().bind(player);
+        spawnNearBoundPlayer();
+        AliceEntity syna = getSyna();
+        if (syna == null || syna.level() != player.level()) {
+            BridgeState.get().setLastEvent("give_item_failed:manifest_failed");
+            return;
+        }
+        double x = syna.getX();
+        double y = syna.getY() + 0.5D;
+        double z = syna.getZ();
+        ItemEntity drop = new ItemEntity(player.serverLevel(), x, y, z, new ItemStack(item, count));
+        drop.getPersistentData().putBoolean("SynaGift", true);
+        drop.getPersistentData().putUUID("SynaGiftTarget", player.getUUID());
+        drop.setPickUpDelay(10);
+        player.serverLevel().addFreshEntity(drop);
+        SynaManifestationDirector.get().onManifested("requested_gift", true);
+        SynaStoryData data = SynaStoryData.get(player.server);
+        data.dependency = Math.min(100, data.dependency + 4);
+        data.setDirty();
+        BridgeState.get().setLastEvent("give_item:" + itemId + ":" + count);
+    }
+
+    private boolean isForbiddenGift(ResourceLocation itemId) {
+        if (itemId == null) return true;
+        String id = itemId.toString();
+        String path = itemId.getPath();
+        return FORBIDDEN_GIFT_IDS.contains(id)
+                || path.endsWith("_spawn_egg")
+                || path.contains("command_block")
+                || path.contains("structure_block")
+                || path.contains("debug_stick");
     }
 
     public boolean isSyna(Entity entity) {
@@ -645,6 +885,21 @@ public final class SynaController {
 
     public int getHorrorChallengeTicks() {
         return horrorState.getChallengeTicks();
+    }
+    public String getHorrorBeat() {
+        return horrorState.getBeat();
+    }
+
+    public int getHorrorOmenLevel() {
+        return horrorState.getOmenLevel();
+    }
+
+    public long getHorrorEpisodeId() {
+        return horrorState.getEpisodeId();
+    }
+
+    public String getHorrorLastOutcome() {
+        return horrorState.getLastOutcome();
     }
 
     public String getWoodTaskStage() {
@@ -973,8 +1228,8 @@ public final class SynaController {
                 BridgeState.get().setLastEvent("spawn_at_failed:create_entity_failed");
                 return;
             }
-            syna.setCustomName(Component.literal("Alice"));
-            syna.setCustomNameVisible(true);
+            syna.setCustomName(null);
+            syna.setCustomNameVisible(false);
             syna.setPersistenceRequired();
             syna.setNoAi(false);
             syna.moveTo(x, y, z, 0.0F, 0.0F);
@@ -987,7 +1242,7 @@ public final class SynaController {
         taskDetail = "spawn_at:" + formatPos(BlockPos.containing(x, y, z));
         BridgeState.get().setLastEvent("syna_spawned_at:" + formatPos(BlockPos.containing(x, y, z)));
     }
-    private void spawnNearBoundPlayer() {
+    private boolean spawnNearBoundPlayer() {
         ServerPlayer player = BridgeState.get().getBoundPlayer();
         MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
         if (player == null && server != null && !server.getPlayerList().getPlayers().isEmpty()) {
@@ -995,35 +1250,98 @@ public final class SynaController {
         }
         if (player == null) {
             BridgeState.get().setLastEvent("spawn_failed:no_player");
-            return;
+            return false;
         }
 
+        ServerLevel ritualLevel = player.serverLevel();
+        Vec3 ritualPos = findSummonRitualPosition(ritualLevel, player);
+        if (ritualPos == null) {
+            BridgeState.get().setLastEvent("spawn_failed:no_safe_nearby_space");
+            return false;
+        }
         cleanupGhostSynas(player.serverLevel(), true);
         cleanupInvalidSynaReference();
 
         AliceEntity existing = getSyna();
+        if (existing != null && existing.level() != ritualLevel) {
+            existing.discard();
+            synaUuid = null;
+            existing = null;
+        }
         if (existing != null) {
-            existing.teleportTo(player.getX() + 1.5D, player.getY(), player.getZ() + 1.5D);
-            existing.setCustomName(Component.literal("Alice"));
+            existing.teleportTo(ritualPos.x, ritualPos.y, ritualPos.z);
+            existing.setCustomName(null);
+            existing.setCustomNameVisible(false);
+            existing.getNavigation().stop();
+            existing.setHorrorFxEnabled(horrorFxEnabled);
+            SynaManifestationDirector.get().onManifested("summon", false);
+            SynaManifestationDirector.get().playArrival(existing);
             BridgeState.get().setLastEvent("syna_teleported_to_player");
-            return;
+            return true;
         }
 
         ServerLevel level = player.serverLevel();
         AliceEntity syna = ModEntities.ALICE.get().create(level);
         if (syna == null) {
             BridgeState.get().setLastEvent("spawn_failed:create_entity_failed");
-            return;
+            return false;
         }
-        syna.setCustomName(Component.literal("Alice"));
-        syna.setCustomNameVisible(true);
+        syna.setCustomName(null);
+        syna.setCustomNameVisible(false);
         syna.setPersistenceRequired();
         syna.setNoAi(false);
-        syna.moveTo(player.getX() + 1.5D, player.getY(), player.getZ() + 1.5D, player.getYRot(), 0.0F);
+        syna.setHorrorFxEnabled(horrorFxEnabled);
+        syna.moveTo(ritualPos.x, ritualPos.y, ritualPos.z, player.getYRot(), 0.0F);
         level.addFreshEntity(syna);
         synaUuid = syna.getUUID();
+        syna.getNavigation().stop();
+        SynaManifestationDirector.get().onManifested("summon", false);
+        SynaManifestationDirector.get().playArrival(syna);
         currentTask = "idle";
-        announce(server, "[系统] Syna 进入了世界", "syna_spawned");
+        BridgeState.get().setLastEvent("syna_manifested_silently");
+        return true;
+    }
+
+    private Vec3 findSummonRitualPosition(ServerLevel level, ServerPlayer player) {
+        Vec3 look = player.getLookAngle();
+        Vec3 horizontal = new Vec3(look.x, 0.0D, look.z);
+        if (horizontal.lengthSqr() < 0.01D) horizontal = new Vec3(0.0D, 0.0D, 1.0D);
+        horizontal = horizontal.normalize();
+        Vec3 side = new Vec3(-horizontal.z, 0.0D, horizontal.x);
+        Vec3[] candidates = new Vec3[] {
+                player.position().subtract(horizontal.scale(3.0D)),
+                player.position().subtract(horizontal.scale(3.0D)).add(side.scale(1.5D)),
+                player.position().subtract(horizontal.scale(3.0D)).subtract(side.scale(1.5D)),
+                player.position().add(side.scale(2.5D)),
+                player.position().subtract(side.scale(2.5D)),
+                player.position().add(horizontal.scale(2.5D))
+        };
+        for (Vec3 candidate : candidates) {
+            BlockPos base = BlockPos.containing(candidate);
+            for (int yOffset : new int[]{0, 1, -1, 2, -2}) {
+                BlockPos pos = base.offset(0, yOffset, 0);
+                if (level.getBlockState(pos).isAir() && level.getBlockState(pos.above()).isAir()
+                        && level.getBlockState(pos.below()).isSolid()) {
+                    return Vec3.atBottomCenterOf(pos);
+                }
+            }
+        }
+        BlockPos origin = player.blockPosition();
+        for (int radius = 1; radius <= 5; radius++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != radius) continue;
+                    for (int dy : new int[]{0, 1, -1, 2, -2}) {
+                        BlockPos pos = origin.offset(dx, dy, dz);
+                        if (level.getBlockState(pos).isAir() && level.getBlockState(pos.above()).isAir()
+                                && level.getBlockState(pos.below()).isSolid()) {
+                            return Vec3.atBottomCenterOf(pos);
+                        }
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     public void summonFromChat(ServerPlayer player) {
@@ -1033,11 +1351,67 @@ public final class SynaController {
         spawnNearBoundPlayer();
     }
 
+    public void summonSilently(ServerPlayer player, String reason, boolean shortVisit) {
+        if (player != null) BridgeState.get().bind(player);
+        spawnNearBoundPlayer();
+        AliceEntity syna = getSyna();
+        if (syna != null) {
+            syna.setCustomName(null);
+            syna.setCustomNameVisible(false);
+            syna.getNavigation().stop();
+            SynaManifestationDirector.get().onManifested(reason, shortVisit);
+        }
+    }
+
+    public AliceEntity summonSilentlyAt(ServerPlayer player, BlockPos pos, String reason, boolean shortVisit) {
+        if (player == null || pos == null) return null;
+        BridgeState.get().bind(player);
+        cleanupGhostSynas(player.serverLevel(), true);
+        cleanupInvalidSynaReference();
+        AliceEntity syna = getSyna();
+        if (syna == null) {
+            syna = ModEntities.ALICE.get().create(player.serverLevel());
+            if (syna == null) return null;
+            syna.setPersistenceRequired();
+            syna.setNoAi(false);
+            syna.setHorrorFxEnabled(horrorFxEnabled);
+            syna.moveTo(pos.getX() + 0.5D, pos.getY(), pos.getZ() + 0.5D, player.getYRot() + 180.0F, 0.0F);
+            player.serverLevel().addFreshEntity(syna);
+            synaUuid = syna.getUUID();
+        } else {
+            syna.teleportTo(pos.getX() + 0.5D, pos.getY(), pos.getZ() + 0.5D);
+        }
+        syna.setCustomName(null);
+        syna.setCustomNameVisible(false);
+        syna.getNavigation().stop();
+        currentTask = "idle";
+        onSilentManifest(reason, shortVisit);
+        SynaManifestationDirector.get().playArrival(syna);
+        return syna;
+    }
+
+    private void onSilentManifest(String reason, boolean shortVisit) {
+        SynaManifestationDirector.get().onManifested(reason, shortVisit);
+        BridgeState.get().setLastEvent("syna_manifested_silently:" + safeEventToken(reason));
+    }
+
+    public void clearSessionPresence(MinecraftServer server) {
+        restoreOriginalSynaPlayer("session_login_cleanup");
+        if (server != null) {
+            for (ServerLevel level : server.getAllLevels()) cleanupGhostSynas(level, false);
+        }
+        synaUuid = null;
+        resetAllTasks();
+        BridgeState.get().setLastEvent("session_presence_cleared");
+        BridgeState.get().setLastAction("session_login:body_absent");
+    }
+
     private void despawn() {
         restoreOriginalSynaPlayer("despawn");
         MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
         AliceEntity syna = getSyna();
         if (syna != null) {
+            SynaManifestationDirector.get().playDeparture(syna);
             syna.discard();
         }
         if (server != null) {
@@ -1048,6 +1422,35 @@ public final class SynaController {
         synaUuid = null;
         resetAllTasks();
         BridgeState.get().setLastEvent("syna_despawned");
+    }
+
+    public void setHorrorFxEnabled(boolean enabled) {
+        horrorFxEnabled = enabled;
+        AliceEntity syna = getSyna();
+        if (syna != null) syna.setHorrorFxEnabled(enabled);
+        BridgeState.get().setLastEvent("horror_fx:" + (enabled ? "enabled" : "disabled"));
+    }
+
+    public boolean isHorrorFxEnabled() {
+        return horrorFxEnabled;
+    }
+
+    public void lightHit(String playerName) {
+        ServerPlayer player = findPlayerByName(playerName);
+        if (player == null) player = BridgeState.get().getBoundPlayer();
+        MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+        if (player == null || server == null) {
+            BridgeState.get().setLastEvent("manifest_light_hit_failed:no_player");
+            return;
+        }
+        SynaStoryData data = SynaStoryData.get(server);
+        if (!data.episodeEvents.add("manifest:light_hit")) {
+            BridgeState.get().setLastEvent("manifest_light_hit_failed:episode_repeat");
+            return;
+        }
+        data.setDirty();
+        player.hurt(player.damageSources().magic(), 1.0F);
+        BridgeState.get().setLastEvent("manifest_light_hit:" + player.getGameProfile().getName());
     }
 
     private void goTo(Double x, Double y, Double z) {
@@ -1210,8 +1613,8 @@ public final class SynaController {
             }
             syna.setInvisible(false);
             syna.removeEffect(MobEffects.INVISIBILITY);
-            syna.setCustomName(Component.literal("Horror Syna"));
-            syna.setCustomNameVisible(true);
+            syna.setCustomName(null);
+            syna.setCustomNameVisible(false);
             hideOriginalSynaPlayer(ownerName, syna);
             currentTask = "horror_takeover";
             taskDetail = "second_form_takeover:" + (playerName == null || playerName.isBlank() ? "none" : playerName);
@@ -1242,6 +1645,13 @@ public final class SynaController {
 
     private boolean isHorrorRecoverAction(String action) {
         return "calm".equals(action) || "forgive".equals(action) || "stop".equals(action) || "mercy".equals(action);
+    }
+
+    public void sealByTrueName(String playerName) {
+        AliceEntity syna = getSyna();
+        horrorState.sealByTrueName(syna);
+        if (syna != null) recoverFromHorror(syna, "true_name_sealed");
+        BridgeState.get().setLastEvent("true_name_sealed:" + safeEventToken(playerName));
     }
 
     private void recoverFromHorror(AliceEntity syna, String reason) {
@@ -1346,8 +1756,8 @@ public final class SynaController {
             BridgeState.get().setLastEvent("horror_killed_respawn_failed:" + killer + ":creative=" + wasCreative);
             return;
         }
-        revived.setCustomName(Component.literal("Horror Syna"));
-        revived.setCustomNameVisible(true);
+        revived.setCustomName(null);
+        revived.setCustomNameVisible(false);
         revived.setPersistenceRequired();
         revived.setNoAi(false);
         revived.moveTo(pos.x, pos.y, pos.z, deadSyna.getYRot(), deadSyna.getXRot());
@@ -1378,7 +1788,8 @@ public final class SynaController {
         if (syna != null) {
             syna.getNavigation().stop();
             syna.setTarget(null);
-            syna.setCustomName(Component.literal("Alice"));
+            syna.setCustomName(null);
+            syna.setCustomNameVisible(false);
         }
         horrorState.onTargetDied(syna, entity);
         recoverFromHorror(syna, "target_died");
@@ -1409,6 +1820,10 @@ public final class SynaController {
 
         String action = parts[1].toLowerCase();
         switch (action) {
+            case "test" -> {
+                handleTestCommand(player, parts);
+                return true;
+            }
             case "spawn", "summon", "come" -> {
                 summonFromChat(player);
                 replyToPlayer(player, "Syna 已召唤到你身边。");
@@ -1523,6 +1938,18 @@ public final class SynaController {
                 replyToPlayer(player, "horror=" + getHorrorStage() + ", anger=" + getHorrorAnger() + ", target=" + getHorrorTargetName());
                 return true;
             }
+            case "story" -> {
+                String storyAction = parts.length >= 3 ? parts[2] : "status";
+                if ("status".equalsIgnoreCase(storyAction)) {
+                    replyToPlayer(player, SynaStoryDirector.get().statusLine(player.getServer()));
+                } else {
+                    boolean accepted = SynaStoryDirector.get().command(player.getServer(), storyAction,
+                            player.getGameProfile().getName(), "chat_debug");
+                    replyToPlayer(player, (accepted ? "story accepted: " : "story rejected: ")
+                            + storyAction + "; " + SynaStoryDirector.get().statusLine(player.getServer()));
+                }
+                return true;
+            }
             case "despawn", "dismiss" -> {
                 despawn();
                 replyToPlayer(player, "Alice 已消失。旧实体也已清理。");
@@ -1545,6 +1972,114 @@ public final class SynaController {
                 return true;
             }
         }
+    }
+
+    private void handleTestCommand(ServerPlayer player, String[] parts) {
+        ServerPlayer bound = BridgeState.get().getBoundPlayer();
+        if (bound != null && !bound.getUUID().equals(player.getUUID())) {
+            replyToPlayer(player, "测试权限只属于当前绑定玩家: " + bound.getGameProfile().getName());
+            return;
+        }
+        BridgeState.get().bind(player);
+        String feature = parts.length >= 3 ? parts[2].toLowerCase(java.util.Locale.ROOT) : "list";
+        if ("list".equals(feature) || "help".equals(feature)) {
+            replyToPlayer(player, "测试1: spawn, vanish, gift <item> [count], steps, knock, breath, darkness");
+            replyToPlayer(player, "测试2: watcher, stalker, ambush, enforcer, omen, lookbehind, tunnel, hit");
+            replyToPlayer(player, "测试3: warning, countdown, hunt, calm, game_block, game_kill, final, boredom <0-100>");
+            replyToPlayer(player, "测试4: observe <diamond|debris|emerald|nether|end|dragon|wither|warden>, story <scene>, seal_prepare, intro_reset, fx <on|off>, rules <on|off>, status, cleanup, reset");
+            return;
+        }
+        switch (feature) {
+            case "spawn" -> summonFromChat(player);
+            case "vanish" -> despawn();
+            case "gift" -> {
+                String item = parts.length >= 4 ? parts[3] : "minecraft:iron_ingot";
+                int count = parts.length >= 5 && parseInteger(parts[4]) != null ? parseInteger(parts[4]) : 1;
+                giveItem(player.getGameProfile().getName(), item, Math.max(1, Math.min(16, count)));
+            }
+            case "steps" -> replyToPlayer(player, SynaBoredomDirector.get().debugLightEvent(player, "phantom_steps"));
+            case "knock" -> replyToPlayer(player, SynaBoredomDirector.get().debugLightEvent(player, "distant_knock"));
+            case "breath" -> replyToPlayer(player, SynaBoredomDirector.get().debugLightEvent(player, "cave_breath"));
+            case "darkness" -> replyToPlayer(player, SynaBoredomDirector.get().debugLightEvent(player, "brief_darkness"));
+            case "watcher", "stalker", "ambush", "enforcer" ->
+                    replyToPlayer(player, SynaBoredomDirector.get().debugEntityEvent(player, feature));
+            case "lookbehind" -> replyToPlayer(player, "accepted=" + SynaManifestationDirector.get().beginLookBehindPrank(player));
+            case "omen" -> {
+                SynaOpeningOmenDirector.get().debugTrigger(player);
+                replyToPlayer(player, "开场预兆已触发");
+            }
+            case "tunnel" -> replyToPlayer(player, "accepted=" + SynaManifestationDirector.get().debugRevealNearby(player));
+            case "hit" -> lightHit(player.getGameProfile().getName());
+            case "warning" -> { if (getSyna() == null) summonFromChat(player); horror("warn", player.getGameProfile().getName(), 45, null, null, "manual_test", null); }
+            case "countdown" -> { if (getSyna() == null) summonFromChat(player); horror("countdown", player.getGameProfile().getName(), 70, null, null, "manual_test", null); }
+            case "hunt" -> { if (getSyna() == null) summonFromChat(player); horror("hunt", player.getGameProfile().getName(), 90, null, null, "manual_test", null); }
+            case "calm" -> { if (getSyna() != null) horror("forgive", player.getGameProfile().getName(), 0, null, null, "manual_test", null); }
+            case "game_block" -> { if (getSyna() == null) summonFromChat(player); horror("challenge_block", player.getGameProfile().getName(), 1, 120, "minecraft:coal", "投入 1 个煤。", null); }
+            case "game_kill" -> { if (getSyna() == null) summonFromChat(player); horror("challenge_kill", player.getGameProfile().getName(), 1, 180, "minecraft:zombie", "击杀 1 只僵尸。", null); }
+            case "final" -> replyToPlayer(player, SynaBoredomDirector.get().debugStartFinalCycle(player));
+            case "boredom" -> {
+                int value = parts.length >= 4 && parseInteger(parts[3]) != null ? parseInteger(parts[3]) : 100;
+                replyToPlayer(player, SynaBoredomDirector.get().debugSetBoredom(player, value));
+            }
+            case "observe" -> testObservation(player, parts.length >= 4 ? parts[3] : "diamond");
+            case "story" -> {
+                String scene = parts.length >= 4 ? parts[3] : "observe";
+                SynaStoryDirector.get().command(player.server, "chapter_5", player.getGameProfile().getName(), "manual_test");
+                boolean accepted = SynaStoryDirector.get().command(player.server, "force_" + scene,
+                        player.getGameProfile().getName(), "manual_test");
+                replyToPlayer(player, "story=" + scene + ", accepted=" + accepted);
+            }
+            case "seal_prepare" -> replyToPlayer(player, SynaTrueNameDirector.get().debugPrepare(player));
+            case "intro_reset" -> replyToPlayer(player, SynaFirstContactDirector.get().debugReset(player));
+            case "fx" -> {
+                boolean enabled = parts.length < 4 || !"off".equalsIgnoreCase(parts[3]);
+                setHorrorFxEnabled(enabled);
+                replyToPlayer(player, "horrorFx=" + enabled);
+            }
+            case "rules" -> {
+                boolean enabled = parts.length < 4 || !"off".equalsIgnoreCase(parts[3]);
+                player.server.overworld().getGameRules().getRule(SynaGameRules.FINAL_CYCLE).set(enabled, player.server);
+                player.server.overworld().getGameRules().getRule(SynaGameRules.HORROR_EVENTS).set(enabled, player.server);
+                replyToPlayer(player, "synaFinalCycle=" + enabled + ", synaHorrorEvents=" + enabled);
+            }
+            case "cleanup" -> { HorrorEntityEventDirector.get().reset(player.server); despawn(); replyToPlayer(player, "测试实体与 Syna 已清理"); }
+            case "reset" -> {
+                HorrorEntityEventDirector.get().reset(player.server);
+                SynaStoryDirector.get().command(player.server, "reset", player.getGameProfile().getName(), "manual_test");
+                if (getSyna() != null) horror("forgive", player.getGameProfile().getName(), 0,
+                        null, null, "manual_test_reset", null);
+                if (getSyna() != null) despawn();
+                SynaBoredomDirector.get().debugReset(player);
+                SynaFirstContactDirector.get().debugReset(player);
+                replyToPlayer(player, "故事、恐怖实体、无聊值和 Syna 已重置");
+            }
+            case "status" -> replyToPlayer(player, "lastEvent=" + BridgeState.get().getLastEvent() + "; "
+                    + SynaStoryDirector.get().statusLine(player.server) + "; horror=" + getHorrorStage()
+                    + "; " + HorrorEntityEventDirector.get().statusLine()
+                    + "; boredom=" + SynaBoredomDirector.get().toJson(player.server));
+            default -> replyToPlayer(player, "未知测试功能。输入 syna test list");
+        }
+        if (!("steps".equals(feature) || "knock".equals(feature) || "breath".equals(feature)
+                || "darkness".equals(feature) || "watcher".equals(feature) || "stalker".equals(feature)
+                || "ambush".equals(feature) || "enforcer".equals(feature) || "status".equals(feature)
+                || "boredom".equals(feature) || "final".equals(feature))) {
+            replyToPlayer(player, "test=" + feature + ", lastEvent=" + BridgeState.get().getLastEvent());
+        }
+    }
+
+    private void testObservation(ServerPlayer player, String requested) {
+        String key = requested == null ? "diamond" : requested.toLowerCase(java.util.Locale.ROOT);
+        String[] fact = switch (key) {
+            case "debris" -> new String[]{"rare_block", "ancient_debris"};
+            case "emerald" -> new String[]{"rare_block", "emerald"};
+            case "nether" -> new String[]{"dimension", "minecraft:the_nether"};
+            case "end" -> new String[]{"dimension", "minecraft:the_end"};
+            case "dragon" -> new String[]{"major_kill", "entity.minecraft.ender_dragon"};
+            case "wither" -> new String[]{"major_kill", "entity.minecraft.wither"};
+            case "warden" -> new String[]{"major_kill", "entity.minecraft.warden"};
+            default -> new String[]{"rare_block", "diamond"};
+        };
+        SynaBoredomDirector.get().observe(player, fact[0], fact[1]);
     }
 
     private void replyToPlayer(ServerPlayer player, String text) {
@@ -4727,6 +5262,7 @@ public final class SynaController {
 
     private void say(MinecraftServer server, String text) {
         if (text != null && !text.isBlank()) {
+            SynaManifestationDirector.get().rememberLine(text);
             server.getPlayerList().broadcastSystemMessage(Component.literal("[Syna] " + text), false);
             BridgeState.get().setLastEvent("say");
         }

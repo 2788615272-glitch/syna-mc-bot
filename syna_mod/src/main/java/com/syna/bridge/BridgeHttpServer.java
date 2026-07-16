@@ -8,6 +8,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.server.ServerLifecycleHooks;
 
 import java.io.IOException;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class BridgeHttpServer {
     private HttpServer server;
@@ -32,9 +34,13 @@ public final class BridgeHttpServer {
         if (server != null) return;
         try {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 8765), 0);
-            server.createContext("/health", new JsonHandler(exchange -> "{\"ok\":true,\"service\":\"synabridge\"}"));
+            server.createContext("/health", new JsonHandler(exchange -> "{\"ok\":true,\"service\":\"synabridge\",\"protocol\":"
+                    + BridgeProtocol.VERSION + "}"));
             server.createContext("/state", new JsonHandler(exchange -> BridgeState.get().toJson()));
+            server.createContext("/events", new ConversationHandler());
+            server.createContext("/input", new InputHandler());
             server.createContext("/command", new CommandHandler());
+            server.createContext("/intent", new IntentHandler());
             server.createContext("/blueprint", new BlueprintHandler());
             server.createContext("/scan", new BridgeScanHandler());
             server.createContext("/chunk_reload", new ChunkReloadHandler());
@@ -80,17 +86,24 @@ public final class BridgeHttpServer {
             }
 
             String raw = readBody(exchange.getRequestBody());
-            String type = jsonValue(raw, "type");
-            String text = jsonValue(raw, "text");
-            String item = jsonValue(raw, "item");
-            String player = jsonValue(raw, "player");
-            String reason = jsonValue(raw, "reason");
-            String owner = jsonValue(raw, "owner");
-            Double x = jsonNumber(raw, "x");
-            Double y = jsonNumber(raw, "y");
-            Double z = jsonNumber(raw, "z");
-            Integer count = jsonInteger(raw, "count");
-            Integer seconds = jsonInteger(raw, "seconds");
+            JsonObject body;
+            try {
+                body = JsonParser.parseString(raw).getAsJsonObject();
+            } catch (Exception e) {
+                writeJson(exchange, 400, "{\"ok\":false,\"error\":\"invalid_json\"}");
+                return;
+            }
+            String type = jsonString(body, "type");
+            String text = jsonString(body, "text");
+            String item = jsonString(body, "item");
+            String player = jsonString(body, "player");
+            String reason = jsonString(body, "reason");
+            String owner = jsonString(body, "owner");
+            Double x = jsonDouble(body, "x");
+            Double y = jsonDouble(body, "y");
+            Double z = jsonDouble(body, "z");
+            Integer count = jsonInteger(body, "count");
+            Integer seconds = jsonInteger(body, "seconds");
 
             var mcServer = ServerLifecycleHooks.getCurrentServer();
             if (mcServer == null) {
@@ -363,8 +376,14 @@ public final class BridgeHttpServer {
                 return;
             }
             String raw = readBody(exchange.getRequestBody());
-            String player = jsonValue(raw, "player");
-            String reason = jsonValue(raw, "reason");
+            JsonObject body;
+            try {
+                body = JsonParser.parseString(raw).getAsJsonObject();
+            } catch (Exception e) {
+                writeJson(exchange, 400, "{\"ok\":false,\"error\":\"invalid_json\"}");
+                return;
+            }
+            String player = jsonString(body, "player");
             if (player == null || player.isBlank()) {
                 writeJson(exchange, 400, "{\"ok\":false,\"error\":\"missing_player\"}");
                 return;
@@ -402,6 +421,8 @@ public final class BridgeHttpServer {
             String speaker = obj.has("speaker") ? obj.get("speaker").getAsString() : null;
             String text = obj.has("text") ? obj.get("text").getAsString() : "";
             String url = obj.has("url") ? obj.get("url").getAsString() : "";
+            boolean interrupt = obj.has("interrupt") && obj.get("interrupt").getAsBoolean();
+            int generation = obj.has("generation") ? obj.get("generation").getAsInt() : 0;
             byte[] audioBytes = new byte[0];
             if (obj.has("audio_b64")) {
                 try {
@@ -411,14 +432,131 @@ public final class BridgeHttpServer {
                     return;
                 }
             }
-            if ((url == null || url.isBlank()) && audioBytes.length == 0) {
+            if (!interrupt && (url == null || url.isBlank()) && audioBytes.length == 0) {
                 writeJson(exchange, 400, "{\"ok\":false,\"error\":\"missing_audio\"}");
                 return;
             }
             if (id == null || id.isBlank()) id = "syna-" + System.currentTimeMillis();
             if (speaker == null || speaker.isBlank()) speaker = "Syna";
-            SynaVoiceNetwork.broadcast(id, speaker, text, url, audioBytes);
+            SynaVoiceNetwork.broadcast(id, speaker, text, url, audioBytes, interrupt, generation);
             writeJson(exchange, 200, "{\"ok\":true,\"broadcast\":true,\"inline_audio\":" + (audioBytes.length > 0) + "}");
+        }
+    }
+
+    private static class IntentHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                writeJson(exchange, 405, "{\"ok\":false,\"error\":\"method_not_allowed\"}");
+                return;
+            }
+            JsonObject body;
+            try {
+                body = JsonParser.parseString(readBody(exchange.getRequestBody())).getAsJsonObject();
+            } catch (Exception error) {
+                writeJson(exchange, 400, "{\"ok\":false,\"error\":\"invalid_json\"}");
+                return;
+            }
+            if (ServerLifecycleHooks.getCurrentServer() == null) {
+                writeJson(exchange, 503, "{\"ok\":false,\"error\":\"server_unavailable\"}");
+                return;
+            }
+            try {
+                JsonObject receipt = BridgeIntentQueue.get().offer(body).get(2500, TimeUnit.MILLISECONDS);
+                receipt.addProperty("ok", true);
+                receipt.add("state", JsonParser.parseString(BridgeState.get().toJson()));
+                writeJson(exchange, 200, receipt.toString());
+            } catch (Exception error) {
+                writeJson(exchange, 504, "{\"ok\":false,\"accepted\":false,\"completed\":false,\"result\":\"execution_timeout\"}");
+            }
+        }
+    }
+
+    private static class ConversationHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                writeJson(exchange, 405, "{\"ok\":false,\"error\":\"method_not_allowed\"}");
+                return;
+            }
+            long after = 0L;
+            String rawAfter = parseQuery(exchange.getRequestURI().getRawQuery()).get("after");
+            if (rawAfter != null) {
+                try {
+                    after = Long.parseLong(rawAfter);
+                } catch (NumberFormatException ignored) {
+                }
+            }
+
+            JsonArray events = new JsonArray();
+            for (BridgeConversation.Event message : BridgeConversation.get().after(after)) {
+                JsonObject event = new JsonObject();
+                event.addProperty("id", message.id());
+                event.addProperty("type", message.type());
+                event.addProperty("player", message.player());
+                if (!message.text().isBlank()) event.addProperty("text", message.text());
+                if (!message.eventKey().isBlank()) event.addProperty("eventKey", message.eventKey());
+                if (!message.item().isBlank()) event.addProperty("item", message.item());
+                if (message.count() > 0) event.addProperty("count", message.count());
+                events.add(event);
+            }
+            JsonObject body = new JsonObject();
+            body.addProperty("ok", true);
+            body.addProperty("latestId", BridgeConversation.get().latestId());
+            body.add("events", events);
+            writeJson(exchange, 200, body.toString());
+        }
+    }
+
+    private static class InputHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                writeJson(exchange, 405, "{\"ok\":false,\"error\":\"method_not_allowed\"}");
+                return;
+            }
+            JsonObject body;
+            try {
+                body = JsonParser.parseString(readBody(exchange.getRequestBody())).getAsJsonObject();
+            } catch (Exception e) {
+                writeJson(exchange, 400, "{\"ok\":false,\"error\":\"invalid_json\"}");
+                return;
+            }
+            String text = jsonString(body, "text");
+            String playerName = jsonString(body, "player");
+            if (text == null || text.isBlank()) {
+                writeJson(exchange, 400, "{\"ok\":false,\"error\":\"missing_text\"}");
+                return;
+            }
+            if ("[probe]".equals(text)) {
+                writeJson(exchange, 200, "{\"ok\":true,\"accepted\":true,\"probe\":true}");
+                return;
+            }
+            var server = ServerLifecycleHooks.getCurrentServer();
+            if (server == null) {
+                writeJson(exchange, 503, "{\"ok\":false,\"error\":\"server_unavailable\"}");
+                return;
+            }
+            ServerPlayer player = null;
+            if (playerName != null && !playerName.isBlank()) {
+                for (ServerPlayer candidate : server.getPlayerList().getPlayers()) {
+                    if (candidate.getGameProfile().getName().equalsIgnoreCase(playerName)) {
+                        player = candidate;
+                        break;
+                    }
+                }
+            }
+            if (player == null) player = BridgeState.get().getBoundPlayer();
+            if (player == null && !server.getPlayerList().getPlayers().isEmpty()) player = server.getPlayerList().getPlayers().get(0);
+            if (player != null && SynaTrueNameDirector.get().handleRitualSpeech(player, text)) {
+                writeJson(exchange, 200, "{\"ok\":true,\"accepted\":true,\"ritual\":true}");
+                return;
+            }
+            String resolvedPlayer = player == null ? (playerName == null ? "Player" : playerName) : player.getGameProfile().getName();
+            BridgeConversation.get().record(resolvedPlayer, text);
+            if (player != null) SynaStoryDirector.get().onPlayerChat(player, text);
+            BridgeState.get().addDebug("voice_input:" + resolvedPlayer);
+            writeJson(exchange, 200, "{\"ok\":true,\"accepted\":true}");
         }
     }
     // ─── Utilities ─────────────────────────────────────────────────────────
@@ -466,52 +604,27 @@ public final class BridgeHttpServer {
     // Legacy hand-rolled JSON parsers — kept for /command which still uses
     // them. New handlers use Gson.
 
-    private static String jsonValue(String raw, String key) {
-        String needle = "\"" + key + "\"";
-        int start = raw.indexOf(needle);
-        if (start < 0) return null;
-        int colon = raw.indexOf(':', start + needle.length());
-        if (colon < 0) return null;
-        int firstQuote = raw.indexOf('"', colon + 1);
-        if (firstQuote < 0) return null;
-        int endQuote = raw.indexOf('"', firstQuote + 1);
-        if (endQuote < 0) return null;
-        return raw.substring(firstQuote + 1, endQuote);
+    private static String jsonString(JsonObject body, String key) {
+        JsonElement value = body.get(key);
+        return value == null || value.isJsonNull() ? null : value.getAsString();
     }
 
-    private static Double jsonNumber(String raw, String key) {
-        String needle = "\"" + key + "\"";
-        int start = raw.indexOf(needle);
-        if (start < 0) return null;
-        int colon = raw.indexOf(':', start + needle.length());
-        if (colon < 0) return null;
-
-        int valueStart = colon + 1;
-        while (valueStart < raw.length() && Character.isWhitespace(raw.charAt(valueStart))) {
-            valueStart++;
-        }
-
-        int valueEnd = valueStart;
-        while (valueEnd < raw.length()) {
-            char c = raw.charAt(valueEnd);
-            if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.') {
-                valueEnd++;
-            } else {
-                break;
-            }
-        }
-
-        if (valueEnd <= valueStart) return null;
+    private static Double jsonDouble(JsonObject body, String key) {
+        JsonElement value = body.get(key);
         try {
-            return Double.parseDouble(raw.substring(valueStart, valueEnd));
-        } catch (NumberFormatException ignored) {
+            return value == null || value.isJsonNull() ? null : value.getAsDouble();
+        } catch (Exception ignored) {
             return null;
         }
     }
 
-    private static Integer jsonInteger(String raw, String key) {
-        Double value = jsonNumber(raw, key);
-        return value == null ? null : value.intValue();
+    private static Integer jsonInteger(JsonObject body, String key) {
+        JsonElement value = body.get(key);
+        try {
+            return value == null || value.isJsonNull() ? null : value.getAsInt();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 }
 

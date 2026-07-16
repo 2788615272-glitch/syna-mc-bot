@@ -3,6 +3,7 @@ package com.syna.bridge;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.commands.arguments.EntityAnchorArgument;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -12,10 +13,7 @@ import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.FloatGoal;
-import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
-import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
-import net.minecraft.world.entity.animal.IronGolem;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -27,6 +25,8 @@ public class AliceEntity extends PathfinderMob {
     private static final EntityDataAccessor<Integer> DATA_HORROR_COUNTDOWN = SynchedEntityData.defineId(AliceEntity.class, EntityDataSerializers.INT);
     private static final EntityDataAccessor<String> DATA_HORROR_TARGET = SynchedEntityData.defineId(AliceEntity.class, EntityDataSerializers.STRING);
     private static final EntityDataAccessor<String> DATA_HORROR_CHALLENGE = SynchedEntityData.defineId(AliceEntity.class, EntityDataSerializers.STRING);
+    private static final EntityDataAccessor<Boolean> DATA_HORROR_FX = SynchedEntityData.defineId(AliceEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Integer> DATA_CHALLENGE_INTRO = SynchedEntityData.defineId(AliceEntity.class, EntityDataSerializers.INT);
 
     private boolean miningSwing;
     private final SynaInventory inventory = new SynaInventory();
@@ -56,18 +56,20 @@ public class AliceEntity extends PathfinderMob {
         this.entityData.define(DATA_HORROR_COUNTDOWN, 0);
         this.entityData.define(DATA_HORROR_TARGET, "");
         this.entityData.define(DATA_HORROR_CHALLENGE, "");
+        this.entityData.define(DATA_HORROR_FX, true);
+        this.entityData.define(DATA_CHALLENGE_INTRO, 0);
     }
 
     @Override
     protected void registerGoals() {
         this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(8, new LookAtPlayerGoal(this, Player.class, 8.0F));
-        this.goalSelector.addGoal(9, new LookAtPlayerGoal(this, IronGolem.class, 8.0F));
-        this.goalSelector.addGoal(10, new RandomLookAroundGoal(this));
     }
 
     @Override
     public boolean hurt(DamageSource source, float amount) {
+        if (!this.level().isClientSide && SynaFirstContactDirector.get().interceptFirstAttack(this, source)) {
+            return false;
+        }
         boolean result = super.hurt(source, amount);
         if (result && this.isAlive()) {
             this.setLastHurtByMob(null);
@@ -147,15 +149,32 @@ public class AliceEntity extends PathfinderMob {
         return this.entityData.get(DATA_HORROR_CHALLENGE);
     }
 
+    public boolean isHorrorFxEnabled() {
+        return this.entityData.get(DATA_HORROR_FX);
+    }
+
+    public int getChallengeIntroTicks() {
+        return this.entityData.get(DATA_CHALLENGE_INTRO);
+    }
+
+    public void setHorrorFxEnabled(boolean enabled) {
+        this.entityData.set(DATA_HORROR_FX, enabled);
+    }
+
     public void setHorrorState(int stage, int countdownTicks, String targetName) {
         setHorrorState(stage, countdownTicks, targetName, "");
     }
 
     public void setHorrorState(int stage, int countdownTicks, String targetName, String challengeText) {
+        setHorrorState(stage, countdownTicks, targetName, challengeText, 0);
+    }
+
+    public void setHorrorState(int stage, int countdownTicks, String targetName, String challengeText, int challengeIntroTicks) {
         this.entityData.set(DATA_HORROR_STAGE, Math.max(0, stage));
         this.entityData.set(DATA_HORROR_COUNTDOWN, Math.max(0, countdownTicks));
         this.entityData.set(DATA_HORROR_TARGET, targetName == null ? "" : targetName);
         this.entityData.set(DATA_HORROR_CHALLENGE, challengeText == null ? "" : challengeText);
+        this.entityData.set(DATA_CHALLENGE_INTRO, Math.max(0, challengeIntroTicks));
     }
 
     public SynaInventory getInventory() {
@@ -179,6 +198,9 @@ public class AliceEntity extends PathfinderMob {
         if (this.level().isClientSide || itemEntity == null || !itemEntity.isAlive()) {
             return;
         }
+        if (itemEntity.getPersistentData().getBoolean("SynaGift")) {
+            return;
+        }
 
         ItemStack pickedStack = itemEntity.getItem().copy();
         int accepted = inventory.insertFromEntity(itemEntity);
@@ -193,8 +215,20 @@ public class AliceEntity extends PathfinderMob {
     @Override
     public void tick() {
         super.tick();
+        if (!this.level().isClientSide && !SynaController.get().isSyna(this)) {
+            this.discard();
+            return;
+        }
         if (!this.level().isClientSide) {
             this.setItemInHand(InteractionHand.MAIN_HAND, inventory.getMainHandItem().copy());
+            if ("idle".equals(SynaController.get().getCurrentTask())
+                    && !SynaManifestationDirector.get().isDirectingLookAway()) {
+                Player nearest = this.level().getNearestPlayer(this, 64.0D);
+                if (nearest != null) {
+                    this.getLookControl().setLookAt(nearest, 360.0F, 360.0F);
+                    this.lookAt(EntityAnchorArgument.Anchor.EYES, nearest.getEyePosition());
+                }
+            }
         }
         if (!this.level().isClientSide && miningSwing && this.tickCount % 6 == 0) {
             BridgeState.get().addDebug("swing_main_hand,tick=" + this.tickCount + ",yRot=" + this.getYRot() + ",xRot=" + this.getXRot());

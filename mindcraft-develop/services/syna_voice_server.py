@@ -40,6 +40,9 @@ def log(*args, **kwargs):
 
 def sanitize_tts_text(text):
     text = str(text or "")
+    text = re.sub(r"</?s>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<\|[^|>]+\|>", "", text)
+    text = re.sub(r"</?(?:assistant|user|system)>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"```[\s\S]*?```", " ", text)
     text = re.sub(r"!\w+\s*\([^\n]*\)", " ", text)
     text = re.sub(r"!\w+", " ", text)

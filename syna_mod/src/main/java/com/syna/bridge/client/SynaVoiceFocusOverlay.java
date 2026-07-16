@@ -10,13 +10,13 @@ import net.minecraftforge.fml.common.Mod;
 
 @Mod.EventBusSubscriber(modid = SynaBridgeMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.FORGE, value = Dist.CLIENT)
 public final class SynaVoiceFocusOverlay {
-    private static long focusedUntilMillis = 0L;
+    private static volatile boolean recording = false;
 
     private SynaVoiceFocusOverlay() {
     }
 
-    public static void markFocused() {
-        focusedUntilMillis = System.currentTimeMillis() + 1800L;
+    public static void setRecording(boolean value) {
+        recording = value;
     }
 
     @SubscribeEvent
@@ -26,8 +26,7 @@ public final class SynaVoiceFocusOverlay {
             return;
         }
 
-        boolean keyDown = BlueprintKeybinds.VOICE_FOCUS.isDown();
-        if (!keyDown && System.currentTimeMillis() > focusedUntilMillis) {
+        if (!recording) {
             return;
         }
 

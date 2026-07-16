@@ -30,16 +30,19 @@ public final class SynaHorrorOverlay {
         }
         String target = syna.getHorrorTargetName();
         if (target == null || target.isBlank()) {
-            target = "unknown";
+            target = "未知目标";
+        }
+        if (!target.equalsIgnoreCase(mc.player.getGameProfile().getName())) {
+            return;
         }
         String text;
         int color;
         if (stage >= 4) {
-            text = "SYNA IS COMING  target: " + target;
+            text = "Syna 正在追来  目标：" + target;
             color = 0xFFFF2020;
         } else {
             int seconds = Math.max(0, syna.getHorrorCountdownTicks() / 20);
-            text = "SYNA COUNTDOWN  " + seconds + "s  target: " + target;
+            text = "追杀倒计时  " + seconds + " 秒  目标：" + target;
             color = 0xFFFFD060;
         }
         GuiGraphics graphics = event.getGuiGraphics();
@@ -51,6 +54,13 @@ public final class SynaHorrorOverlay {
 
         String challenge = syna.getHorrorChallengeText();
         if (challenge != null && !challenge.isBlank()) {
+            if (syna.getChallengeIntroTicks() > 0) {
+                int centerX = (width - mc.font.width(challenge)) / 2;
+                int centerY = event.getWindow().getGuiScaledHeight() / 2 - 8;
+                graphics.fill(centerX - 8, centerY - 6, centerX + mc.font.width(challenge) + 8, centerY + 15, 0xCC080008);
+                graphics.drawString(mc.font, challenge, centerX, centerY, 0xFFFFF080, true);
+                return;
+            }
             int cy = y + 14;
             int cx = Math.max(4, width - mc.font.width(challenge) - 8);
             graphics.fill(cx - 4, cy - 3, width - 4, cy + 11, 0xAA080008);

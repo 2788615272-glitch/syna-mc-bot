@@ -1,10 +1,13 @@
 package com.syna.bridge;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -47,8 +50,6 @@ final class SynaHorrorState {
     private static final int STORM_THRESHOLD = 70;
     private static final int COUNTDOWN_THRESHOLD = 130;
     private static final int HUNTING_THRESHOLD = 180;
-    private static final int COUNTDOWN_TICKS = 24000 * 2;
-    private static final int HUNTING_MAX_TICKS = 20 * 75;
     private static final int HUNT_DAMAGE_COOLDOWN_TICKS = 12;
     private static final double HUNT_DAMAGE_RANGE_SQR = 3.25D;
 
@@ -62,6 +63,11 @@ final class SynaHorrorState {
     private int damageCooldownTicks;
     private int ambientTicks;
     private int weatherRestoreTicks;
+    private int stageTicks;
+    private int omenLevel;
+    private long episodeId;
+    private String beat = "dormant";
+    private String lastOutcome = "none";
     private boolean changedThisTick;
     private String angerKey = "";
     private boolean awaitingConfession;
@@ -71,6 +77,7 @@ final class SynaHorrorState {
     private int challengeRequired;
     private int challengeProgress;
     private int challengeTicks;
+    private int challengeIntroTicks;
 
     void tick(AliceEntity syna) {
         changedThisTick = false;
@@ -82,12 +89,16 @@ final class SynaHorrorState {
             anger = Math.max(0, anger - 2);
         }
 
+        stageTicks++;
+        tickStoryBeat(syna);
+
         Entity target = resolveTarget(syna);
         if (target == null && (stage == Stage.COUNTDOWN || stage == Stage.HUNTING)) {
             soften("target_lost");
         }
 
         tickChallenge(syna);
+        if (challengeIntroTicks > 0) challengeIntroTicks--;
 
         if (stage == Stage.COUNTDOWN) {
             countdownTicks = Math.max(0, countdownTicks - 1);
@@ -96,7 +107,7 @@ final class SynaHorrorState {
             }
         } else if (stage == Stage.HUNTING) {
             huntingTicks++;
-            if (huntingTicks > HUNTING_MAX_TICKS) {
+            if (challengeKind == ChallengeKind.NONE && huntingTicks > SynaHorrorConfig.huntTicks()) {
                 forgive("hunt_timeout");
             } else {
                 tickHunt(syna, target);
@@ -282,6 +293,7 @@ final class SynaHorrorState {
         challengeRequired = Math.max(1, Math.min(64, required));
         challengeProgress = 0;
         challengeTicks = seconds * 20;
+        challengeIntroTicks = 20 * 8;
         awaitingConfession = false;
         if (playerName != null && !playerName.isBlank()) {
             setPlayerTarget(playerName);
@@ -306,6 +318,7 @@ final class SynaHorrorState {
         if (challengeTicks <= 0) {
             BridgeState.get().setLastEvent("horror_challenge_failed:timeout:" + safeEvent(challengeTarget));
             clearChallenge();
+            huntingTicks = 0;
             if (syna != null) {
                 enterStage(Stage.HUNTING, syna, "challenge_timeout");
             }
@@ -422,8 +435,9 @@ final class SynaHorrorState {
     String getChallengeOverlayText() {
         if (challengeKind == ChallengeKind.NONE) return "";
         int seconds = Math.max(0, challengeTicks / 20);
-        String task = challengeKind == ChallengeKind.BLOCK ? "DROP" : "KILL";
-        return task + " " + challengeTarget + " " + challengeProgress + "/" + challengeRequired + " " + seconds + "s";
+        String task = challengeKind == ChallengeKind.BLOCK ? "谜题" : "狩猎";
+        String display = challengeKind == ChallengeKind.BLOCK ? challengeClue : challengeTarget;
+        return task + "：" + display + "  进度 " + challengeProgress + "/" + challengeRequired + "  剩余 " + seconds + " 秒";
     }
 
     int getAnger() {
@@ -512,14 +526,21 @@ final class SynaHorrorState {
 
     private void enterStage(Stage next, AliceEntity syna, String reason) {
         if (next == Stage.COUNTDOWN && stage != Stage.COUNTDOWN) {
-            countdownTicks = COUNTDOWN_TICKS;
+            countdownTicks = SynaHorrorConfig.countdownTicks();
         }
         if (next == Stage.HUNTING && stage != Stage.HUNTING) {
             huntingTicks = 0;
             countdownTicks = 0;
         }
         if (stage != next) {
+            if (stage == Stage.CALM && next != Stage.CALM) {
+                episodeId++;
+                omenLevel = 0;
+                lastOutcome = "active";
+            }
             stage = next;
+            stageTicks = 0;
+            beat = beatForStage(next);
             changedThisTick = true;
             BridgeState.get().setLastEvent("horror_stage:" + stage.name().toLowerCase() + ":" + reason + ":" + targetName);
             sendStageMessage(syna, reason);
@@ -542,7 +563,7 @@ final class SynaHorrorState {
         syna.getNavigation().moveTo(living, speed);
         lookAt(syna, living.position().add(0.0D, living.getEyeHeight() * 0.7D, 0.0D));
         if (damageCooldownTicks <= 0 && syna.distanceToSqr(living) <= HUNT_DAMAGE_RANGE_SQR) {
-            living.hurt(syna.damageSources().mobAttack(syna), 7.0F);
+            living.hurt(syna.damageSources().mobAttack(syna), SynaHorrorConfig.huntDamage());
             syna.swing(net.minecraft.world.InteractionHand.MAIN_HAND, true);
             damageCooldownTicks = HUNT_DAMAGE_COOLDOWN_TICKS;
             BridgeState.get().setLastEvent("horror_hit:" + targetName);
@@ -573,7 +594,9 @@ final class SynaHorrorState {
             level.setWeatherParameters(0, 20 * 90, true, stage == Stage.HUNTING);
             weatherRestoreTicks = 20 * 120;
         }
-        if ((stage == Stage.COUNTDOWN || stage == Stage.HUNTING) && ambientTicks % 60 == 0) {
+        if (SynaHorrorConfig.worldScarring()
+                && (stage == Stage.COUNTDOWN || stage == Stage.HUNTING)
+                && ambientTicks % 60 == 0) {
             scarWorld(level, syna.blockPosition());
         }
         if (stage == Stage.CALM && weatherRestoreTicks > 0) {
@@ -647,8 +670,11 @@ final class SynaHorrorState {
     }
 
     private void forgive(String reason) {
+        lastOutcome = outcomeForReason(reason);
         anger = 0;
         stage = Stage.CALM;
+        beat = "aftermath";
+        stageTicks = 0;
         targetUuid = null;
         targetName = "";
         targetKind = "none";
@@ -660,12 +686,106 @@ final class SynaHorrorState {
         BridgeState.get().setLastEvent("horror_calm:" + reason);
     }
 
+    void sealByTrueName(AliceEntity syna) {
+        forgive("true_name_sealed");
+        restoreWeatherNow(syna);
+        if (syna != null) {
+            syncToEntity(syna);
+            syna.getNavigation().stop();
+        }
+    }
+
     String getAngerKey() {
         return angerKey == null ? "" : angerKey;
     }
 
     boolean isAwaitingConfession() {
         return awaitingConfession;
+    }
+    String getBeat() {
+        return beat;
+    }
+
+    int getOmenLevel() {
+        return omenLevel;
+    }
+
+    long getEpisodeId() {
+        return episodeId;
+    }
+
+    String getLastOutcome() {
+        return lastOutcome;
+    }
+
+    private void tickStoryBeat(AliceEntity syna) {
+        if (!(syna.level() instanceof ServerLevel level)) {
+            return;
+        }
+        if (stage == Stage.CALM) {
+            if ("aftermath".equals(beat) && stageTicks >= 20 * 15) {
+                beat = "dormant";
+            }
+            return;
+        }
+
+        if (stage == Stage.WARNING && stageTicks == 20 * 4) {
+            emitOmen(level, syna, 1, "silence");
+        } else if (stage == Stage.STORM && stageTicks == 20 * 3) {
+            emitOmen(level, syna, 2, "wrong_footsteps");
+        } else if (stage == Stage.STORM && stageTicks == 20 * 9) {
+            beat = "confrontation";
+            emitOmen(level, syna, 3, "confrontation");
+        } else if (stage == Stage.COUNTDOWN && stageTicks == 20) {
+            beat = "countdown";
+            emitOmen(level, syna, 4, "rule_given");
+        } else if (stage == Stage.HUNTING && challengeKind != ChallengeKind.NONE) {
+            beat = "bargain";
+        }
+    }
+
+    private void emitOmen(ServerLevel level, AliceEntity syna, int levelNumber, String kind) {
+        omenLevel = Math.max(omenLevel, levelNumber);
+        Entity target = resolveTarget(syna);
+        Vec3 origin = target == null ? syna.position() : target.position();
+        float pitch = switch (levelNumber) {
+            case 1 -> 0.55F;
+            case 2 -> 0.72F;
+            default -> 0.42F;
+        };
+        level.playSound(null, origin.x, origin.y, origin.z, SoundEvents.AMBIENT_CAVE.value(),
+                SoundSource.AMBIENT, 0.65F, pitch);
+        if (levelNumber >= 2) {
+            level.playSound(null, origin.x + 5.0D, origin.y, origin.z - 4.0D,
+                    SoundEvents.WOOD_STEP, SoundSource.AMBIENT, 0.5F, 0.6F);
+        }
+        if (levelNumber >= 3) {
+            Vec3 center = syna.position().add(0.0D, 1.0D, 0.0D);
+            level.sendParticles(ParticleTypes.SOUL, center.x, center.y, center.z,
+                    10, 0.35D, 0.7D, 0.35D, 0.01D);
+        }
+        BridgeState.get().setLastEvent("horror_omen:" + kind + ":" + omenLevel + ":" + targetName);
+    }
+
+    private String beatForStage(Stage value) {
+        return switch (value) {
+            case CALM -> "dormant";
+            case WARNING -> "withdrawal";
+            case STORM -> "omens";
+            case COUNTDOWN -> "countdown";
+            case HUNTING -> challengeKind == ChallengeKind.NONE ? "pursuit" : "bargain";
+        };
+    }
+
+    private String outcomeForReason(String reason) {
+        if (reason == null) return "ended";
+        if (reason.contains("key_matched")) return "confession_accepted";
+        if (reason.contains("true_name_sealed")) return "true_name_sealed";
+        if (reason.contains("challenge_")) return "trial_completed";
+        if (reason.contains("target_died")) return "target_died";
+        if (reason.contains("hunt_timeout")) return "syna_withdrew";
+        if (reason.contains("mercy") || reason.contains("forgive")) return "forgiven";
+        return "ended";
     }
 
     private boolean matchesKey(String guess) {
@@ -715,7 +835,7 @@ final class SynaHorrorState {
             return;
         }
         int visibleCountdown = stage == Stage.COUNTDOWN ? countdownTicks : 0;
-        syna.setHorrorState(stage.id, visibleCountdown, getTargetName(), getChallengeOverlayText());
+        syna.setHorrorState(stage.id, visibleCountdown, getTargetName(), getChallengeOverlayText(), challengeIntroTicks);
     }
 
     private void sendStageMessage(AliceEntity syna, String reason) {

@@ -16,6 +16,7 @@ import math
 import os
 import re
 import struct
+import sys
 import threading
 import time
 import uuid
@@ -177,7 +178,7 @@ def resample_frames_pcm16_mono(frames, source_rate, target_rate):
         return [bytes(out)]
 
 
-async def recognize_full_audio(service, wav_data):
+async def _recognize_full_audio_once(service, wav_data, chunk_size=6400, chunk_sleep=0.0, label="fast"):
     """
     一次性将完整 WAV 音频发送给火山 ASR，等待最终识别结果。
     返回识别文本或 None。
@@ -213,26 +214,29 @@ async def recognize_full_audio(service, wav_data):
         header = build_ws_header(1, 0, 1, 1)
         await ws.send(header + struct.pack(">I", len(config_gz)) + config_gz)
 
-        # 2. 分块发送完整音频（每块 16KB，避免单帧过大）
-        chunk_size = 16384
+        # Match the proven NeuroSama framing: audio chunks, then an empty final frame.
         for i in range(0, len(wav_data), chunk_size):
             chunk = wav_data[i:i + chunk_size]
-            is_last = (i + chunk_size >= len(wav_data))
-            # 最后一块用 specific_flags=2 表示音频结束
-            flags = 2 if is_last else 0
             chunk_gz = gzip.compress(chunk)
-            audio_header = build_ws_header(2, flags, 0, 1)
+            audio_header = build_ws_header(2, 0, 0, 1)
             await ws.send(audio_header + struct.pack(">I", len(chunk_gz)) + chunk_gz)
+            if chunk_sleep > 0:
+                await asyncio.sleep(chunk_sleep)
+
+        final_gz = gzip.compress(b"")
+        final_header = build_ws_header(2, 2, 0, 1)
+        await ws.send(final_header + struct.pack(">I", len(final_gz)) + final_gz)
+        service.diag("volc_audio_sent", requestId=req_id, mode=label, chunkSize=chunk_size, chunkSleep=chunk_sleep)
 
         # 3. 等待最终识别结果
         final_text = ""
         partial_text = ""
-        deadline = time.time() + 8.0  # 最多等 8 秒
-
-        async for msg in ws:
-            if time.time() > deadline:
+        while True:
+            try:
+                msg = await asyncio.wait_for(ws.recv(), timeout=14)
+            except asyncio.TimeoutError:
                 print("⚠️ [ASR] 等待超时", flush=True)
-                service.diag("volc_timeout", requestId=req_id, partialText=partial_text)
+                service.diag("volc_timeout", requestId=req_id, partialText=partial_text, mode=label)
                 break
             if not isinstance(msg, (bytes, bytearray)) or len(msg) < 4:
                 continue
@@ -264,7 +268,7 @@ async def recognize_full_audio(service, wav_data):
     except websockets.exceptions.ConnectionClosed:
         service.diag("volc_connection_closed", requestId=req_id)
         print("⚠️ [ASR] WebSocket 连接被关闭", flush=True)
-        return None
+        return partial_text.strip() if partial_text else None
     except Exception as e:
         print(f"❌ [ASR] 识别异常: {e}", flush=True)
         service.diag("volc_exception", requestId=req_id, error=str(e), errorType=type(e).__name__)
@@ -274,6 +278,28 @@ async def recognize_full_audio(service, wav_data):
             await ws.close()
         except Exception:
             pass
+
+
+async def recognize_full_audio(service, wav_data):
+    """Use the stable NeuroSama fast request plus paced retry strategy."""
+    attempts = [
+        (6400, 0.0, "neuro_fast"),
+        (3200, 0.006, "neuro_paced_retry"),
+    ]
+    for index, (chunk_size, chunk_sleep, label) in enumerate(attempts):
+        text = await _recognize_full_audio_once(
+            service,
+            wav_data,
+            chunk_size=chunk_size,
+            chunk_sleep=chunk_sleep,
+            label=label,
+        )
+        if text:
+            return text
+        if index + 1 < len(attempts):
+            service.diag("volc_retry", previousMode=label, reason="empty_result")
+            print(f"[SynaASR] empty ASR result in {label}; retrying with paced Neuro framing", flush=True)
+    return None
 
 
 # ==========================================
@@ -430,6 +456,11 @@ class SynaASRService:
         self.focus_gate_status = {"allowed": not args.require_focus, "reason": "startup", "time": time.time()}
         self.focus_required = bool(args.require_focus)
         self.focus_window_seconds = max(0.0, float(args.focus_window_seconds or 0.0))
+        self.ptt_mode = bool(getattr(args, "push_to_talk", False))
+        self.neuro_capture = bool(getattr(args, "neuro_capture", False))
+        self._ptt_lock = threading.Lock()
+        self._ptt_active = False
+        self._ptt_session = 0
 
         # 从 keys.json 或参数获取火山配置
         cfg = self.keys_config or {}
@@ -480,19 +511,60 @@ class SynaASRService:
             "time": time.time(),
         }
 
+    def ptt_start(self):
+        with self._ptt_lock:
+            if not self._ptt_active:
+                self._ptt_session += 1
+                self._ptt_active = True
+                changed = True
+            else:
+                changed = False
+            session = self._ptt_session
+        self.muted = False
+        if changed:
+            self.diag("ptt_start", session=session)
+            print(f"[SynaASR] PTT started (session {session})", flush=True)
+        return {"ok": True, "pttMode": self.ptt_mode, "pttActive": True, "pttSession": session, "changed": changed}
+
+    def ptt_stop(self):
+        with self._ptt_lock:
+            changed = self._ptt_active
+            self._ptt_active = False
+            session = self._ptt_session
+        if changed:
+            self.diag("ptt_stop", session=session)
+            print(f"[SynaASR] PTT released (session {session})", flush=True)
+        return {"ok": True, "pttMode": self.ptt_mode, "pttActive": False, "pttSession": session, "changed": changed}
+
+    def ptt_snapshot(self):
+        with self._ptt_lock:
+            return self._ptt_active, self._ptt_session
+
     def status_payload(self):
         with self._mic_status_lock:
             devices = [dict(v) for v in self.mic_status.values()]
         devices.sort(key=lambda d: str(d.get("device", "")))
+        ptt_active, ptt_session = self.ptt_snapshot()
+        freshest_read = max((float(d.get("lastReadAt", 0.0) or 0.0) for d in devices), default=0.0)
+        stale_seconds = time.time() - freshest_read if freshest_read > 0 else float("inf")
+        stream_healthy = any(bool(d.get("streamOpen")) for d in devices) and stale_seconds < 3.0
         return {
+            "ok": True,
+            "healthy": stream_healthy,
+            "staleSeconds": round(stale_seconds, 3) if math.isfinite(stale_seconds) else None,
             "diagPath": str(self.diag_path),
             "muted": self.muted,
+            "pttMode": self.ptt_mode,
+            "pureMod": bool(getattr(self.args, "pure_mod", False)),
+            "pttActive": ptt_active,
+            "pttSession": ptt_session,
+            "captureMode": "neuro_default_16k" if self.neuro_capture else "configured_device",
             "inputDeviceIndex": self.input_device_index,
             "inputDeviceName": self.input_device_name,
             "inputDevices": self.input_devices,
             "micStatus": devices,
             "focusRequired": self.focus_required,
-            "alwaysListen": not self.focus_required,
+            "alwaysListen": not self.focus_required and not self.ptt_mode,
             "focusGate": self.focus_gate_status,
             "lastSendTime": self.last_send_time,
             "rmsThreshold": self.args.rms_threshold,
@@ -584,6 +656,18 @@ class SynaASRService:
         if requests is None:
             print("❌ [SynaASR] requests 未安装，无法转发", flush=True)
             return False
+
+        if bool(getattr(self.args, "pure_mod", False)):
+            url = str(getattr(self.args, "mod_bridge_url", "") or "http://127.0.0.1:8765").rstrip("/") + "/input"
+            try:
+                resp = requests.post(url, json={"player": self.args.sender_name, "text": text}, timeout=5.0)
+                resp.raise_for_status()
+                self.last_send_time = time.time()
+                print(f"[ASR->MOD] sent: {text[:50]}", flush=True)
+                return True
+            except Exception as e:
+                print(f"[ASR->MOD] forwarding failed: {e}", flush=True)
+                return False
 
         agent_name = self.default_agent
         if not agent_name:
@@ -718,7 +802,7 @@ class MicRecordManager:
             if not self.args.all_input_devices:
                 self.service.input_device_index = input_device_index
                 self.service.input_device_name = device_name
-            device_sample_rate = int(float(info.get("defaultSampleRate", self.args.sample_rate) or self.args.sample_rate))
+            device_sample_rate = int(self.args.sample_rate) if self.service.neuro_capture else int(float(info.get("defaultSampleRate", self.args.sample_rate) or self.args.sample_rate))
             if device_sample_rate <= 0:
                 device_sample_rate = int(self.args.sample_rate)
             print(f"[SynaASR] listening on input device {device_label} at {device_sample_rate}Hz", flush=True)
@@ -728,7 +812,7 @@ class MicRecordManager:
             self.service.update_mic_status(requested_device_index if requested_device_index is not None else "default", event="select_failed", error=str(e), streamOpen=False)
             print_input_devices()
             p.terminate()
-            return bool(self.args.all_input_devices)
+            return True
 
         try:
             stream = p.open(
@@ -744,18 +828,20 @@ class MicRecordManager:
             self.service.update_mic_status(input_device_index, label=device_label, event="open_failed", error=str(e), streamOpen=False, requestedRate=device_sample_rate)
             self.service.diag("device_open_failed", device=input_device_index, label=device_label, requestedRate=device_sample_rate, error=str(e))
             p.terminate()
-            return bool(self.args.all_input_devices)
+            return True
 
         end_silence_seconds = self.args.end_silence_frames * self.args.chunk_size / device_sample_rate
         if not self.args.all_input_devices or requested_device_index == self.service.input_devices[0]["index"]:
             print("[SynaASR] microphone listener started", flush=True)
             print(f"   capture rate: {device_sample_rate}Hz -> ASR {self.args.sample_rate}Hz, end silence: {end_silence_seconds:.1f}s, RMS threshold: {self.args.rms_threshold}", flush=True)
             print(f"   target Mindcraft: {self.args.mindcraft_url}, agent: {self.service.default_agent or '(not set)'}", flush=True)
-            print("   mode: full sentence ASR", flush=True)
+            print("   mode: push-to-talk (hold V, release to send)" if self.service.ptt_mode else "   mode: automatic full sentence ASR", flush=True)
             print("", flush=True)
 
         is_recording = False
         recording_started_at = 0.0
+        recording_ptt_session = 0
+        completed_ptt_session = 0
         silence_count = 0
         frames = []
         read_errors = 0
@@ -797,6 +883,39 @@ class MicRecordManager:
                 self.service.update_mic_status(input_device_index, label=device_label, event="reading", lastReadAt=now, lastRms=round(rms, 2), recording=is_recording, readErrors=read_errors, streamOpen=True, captureRate=device_sample_rate, asrRate=self.args.sample_rate)
                 last_status_update = now
 
+            if self.service.ptt_mode:
+                ptt_active, ptt_session = self.service.ptt_snapshot()
+                if ptt_active and ptt_session != completed_ptt_session:
+                    if not is_recording or recording_ptt_session != ptt_session:
+                        if is_recording and frames:
+                            submit_recording(frames, reason="ptt_restarted")
+                        is_recording = True
+                        recording_started_at = now
+                        recording_ptt_session = ptt_session
+                        frames = []
+                        self.service.mark_speech_start(input_device_index)
+                        self.service.diag("ptt_capture_start", device=input_device_index, label=device_label, session=ptt_session)
+                        self.service.interrupt_tts_on_speech_start()
+                        print(f"[ASR:{device_label}] V held; recording PTT session {ptt_session}...", flush=True)
+                    frames.append(data)
+
+                    elapsed = now - recording_started_at
+                    if max_recording_seconds > 0 and elapsed >= max_recording_seconds:
+                        is_recording = False
+                        completed_ptt_session = ptt_session
+                        recorded_frames = frames
+                        frames = []
+                        submit_recording(recorded_frames, reason="ptt_max_duration")
+                else:
+                    if is_recording:
+                        is_recording = False
+                        recorded_frames = frames
+                        frames = []
+                        submit_recording(recorded_frames, reason="ptt_release")
+                    if not ptt_active:
+                        recording_ptt_session = 0
+                continue
+
             if rms > self.args.rms_threshold:
                 silence_count = 0
                 if self.service.muted:
@@ -835,7 +954,7 @@ class MicRecordManager:
             pass
         self.service.update_mic_status(input_device_index if input_device_index is not None else requested_device_index, label=device_label, event="stream_closed", streamOpen=False, recording=False)
         p.terminate()
-        return bool(self.args.all_input_devices)
+        return self.service.is_running
 
     def _log_recognition_future(self, device_label, future):
         try:
@@ -851,7 +970,7 @@ class MicRecordManager:
         wav_data = build_wav_bytes(asr_frames, sample_rate=self.args.sample_rate)
         print(f"[ASR:{device_label}] audio duration: {duration:.1f}s, capture={capture_rate}Hz, asr={self.args.sample_rate}Hz, size: {len(wav_data)//1024}KB", flush=True)
 
-        if duration < 0.3:
+        if duration < 0.2:
             self.service.diag("asr_skip", reason="too_short", label=device_label, duration=round(duration, 3))
             print(f"[ASR:{device_label}] audio too short; ignored", flush=True)
             return
@@ -889,19 +1008,25 @@ class MicRecordManager:
 # HTTP 控制端点 (mute/unmute for echo suppression)
 # ==========================================
 
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 _asr_service_ref = None  # set in main()
 
 
 class ASRControlHandler(BaseHTTPRequestHandler):
-    """Tiny HTTP server: POST /mute, POST /unmute, GET /status"""
+    """Tiny HTTP server for echo suppression, push-to-talk, and diagnostics."""
 
     def log_message(self, format, *args):
         pass  # suppress default logging
 
     def do_POST(self):
         global _asr_service_ref
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            length = 0
+        if length > 0:
+            self.rfile.read(length)
         if self.path == "/mute":
             if _asr_service_ref:
                 _asr_service_ref.muted = True
@@ -912,6 +1037,10 @@ class ASRControlHandler(BaseHTTPRequestHandler):
                 _asr_service_ref.muted = False
                 print("🔊 [ASR] unmuted by voice server", flush=True)
             self._respond(200, {"muted": False})
+        elif self.path == "/ptt/start":
+            self._respond(200, _asr_service_ref.ptt_start() if _asr_service_ref else {"ok": False, "error": "asr_not_ready"})
+        elif self.path == "/ptt/stop":
+            self._respond(200, _asr_service_ref.ptt_stop() if _asr_service_ref else {"ok": False, "error": "asr_not_ready"})
         else:
             self._respond(404, {"error": "not found"})
 
@@ -925,15 +1054,21 @@ class ASRControlHandler(BaseHTTPRequestHandler):
             self._respond(404, {"error": "not found"})
 
     def _respond(self, code, body):
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(json.dumps(body).encode())
+        self.wfile.write(payload)
+        self.wfile.flush()
+        self.close_connection = True
 
 
 def start_control_server(port=8089):
     """Start the mute/unmute HTTP control server in a daemon thread."""
-    server = HTTPServer(("127.0.0.1", port), ASRControlHandler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), ASRControlHandler)
+    server.daemon_threads = True
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     print(f"🎛️ [ASR] 控制端点已启动: http://127.0.0.1:{port} (POST /mute, /unmute, GET /status)", flush=True)
@@ -956,6 +1091,8 @@ def main():
                         help="麦克风采样率 (默认 16000)")
     parser.add_argument("--chunk-size", type=int, default=1024,
                         help="麦克风每帧大小 (默认 1024)")
+    parser.add_argument("--neuro-capture", action="store_true",
+                        help="Use the stable NeuroSama path: default input, mono PCM16, native 16kHz capture.")
     parser.add_argument("--end-silence-frames", type=int, default=16,
                         help="静音多少帧后判定说完 (默认 16，约1.0秒)")
     parser.add_argument("--max-recording-seconds", type=float, default=8.0,
@@ -998,9 +1135,19 @@ def main():
                         help="Require recent V/focus before forwarding recognized speech. Default is always listening.")
     parser.add_argument("--always-listen", action="store_true",
                         help="Compatibility no-op: ASR now always listens unless --require-focus is set.")
+    parser.add_argument("--push-to-talk", action="store_true",
+                        help="Only capture audio while the Minecraft V key is held; release submits immediately.")
+    parser.add_argument("--pure-mod", action="store_true",
+                        help="Forward recognized text directly to SynaBridge /input instead of MindServer.")
     parser.add_argument("--volc-asr-resource-id", default="",
                         help="火山 ASR Resource ID (默认 volc.seedasr.sauc.duration)")
     args = parser.parse_args()
+
+    if args.neuro_capture:
+        args.input_device = None
+        args.all_input_devices = False
+        args.sample_rate = 16000
+        args.chunk_size = 512
 
     if args.list_devices:
         raise SystemExit(print_input_devices())
@@ -1040,8 +1187,37 @@ def main():
 
     # 启动麦克风录音管理器
     mic_manager = MicRecordManager(service, loop)
-    mic_thread = threading.Thread(target=mic_manager.run, daemon=True)
+    def run_microphone():
+        try:
+            mic_manager.run()
+        except BaseException as e:
+            service.diag("microphone_thread_crashed", error=str(e), errorType=type(e).__name__)
+            print(f"[SynaASR] microphone thread crashed: {e}", flush=True)
+
+    mic_thread = threading.Thread(target=run_microphone, daemon=True, name="syna-asr-microphone-manager")
     mic_thread.start()
+
+    def watchdog():
+        started_at = time.time()
+        while service.is_running:
+            time.sleep(2.0)
+            if time.time() - started_at < 12.0:
+                continue
+            status = service.status_payload()
+            stale = status.get("staleSeconds")
+            unhealthy = not bool(status.get("healthy")) and (stale is None or float(stale) >= 6.0)
+            if mic_thread.is_alive() and not unhealthy:
+                continue
+            reason = "thread_exited" if not mic_thread.is_alive() else f"audio_stale:{stale}"
+            service.diag("watchdog_restart", reason=reason)
+            print(f"[SynaASR] watchdog restarting stale service ({reason})", flush=True)
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as e:
+                service.diag("watchdog_restart_failed", error=str(e), errorType=type(e).__name__)
+                os._exit(75)
+
+    threading.Thread(target=watchdog, daemon=True, name="syna-asr-watchdog").start()
 
     # 运行事件循环
     try:

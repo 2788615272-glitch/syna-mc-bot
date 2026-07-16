@@ -5,12 +5,16 @@ import com.syna.bridge.mobility.ResourceRequirement;
 import com.syna.bridge.mobility.path.Waypoint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraftforge.server.ServerLifecycleHooks;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 public final class BridgeState {
@@ -19,6 +23,7 @@ public final class BridgeState {
 
     private volatile UUID boundPlayerUuid;
     private volatile String lastEvent = "boot";
+    private volatile String lastAction = "none";
     private volatile long tick = 0L;
     private final Deque<String> debugLog = new ArrayDeque<>();
 
@@ -50,6 +55,15 @@ public final class BridgeState {
         addDebug("event=" + event);
     }
 
+    public String getLastEvent() {
+        return lastEvent;
+    }
+
+    public void setLastAction(String action) {
+        lastAction = action == null || action.isBlank() ? "none" : action;
+        addDebug("action=" + lastAction);
+    }
+
     public synchronized void addDebug(String message) {
         String entry = tick + ":" + escape(message == null ? "" : message);
         debugLog.addLast(entry);
@@ -65,7 +79,14 @@ public final class BridgeState {
         sb.append("\"ok\":true,");
         sb.append("\"tick\":").append(tick).append(",");
         sb.append("\"lastEvent\":\"").append(escape(lastEvent)).append("\",");
+        sb.append("\"lastAction\":\"").append(escape(lastAction)).append("\",");
         appendDebugLog(sb);
+        sb.append("\"story\":").append(SynaStoryDirector.get().toJson(server)).append(",");
+        sb.append("\"trueNameMystery\":").append(SynaTrueNameDirector.get().toJson(server)).append(",");
+        sb.append("\"firstContact\":").append(SynaFirstContactDirector.get().toJson(server)).append(",");
+        sb.append("\"boredom\":").append(SynaBoredomDirector.get().toJson(server)).append(",");
+        sb.append("\"horrorEvents\":").append(HorrorEntityEventDirector.get().toJson()).append(",");
+        sb.append("\"permissions\":[\"manifest\",\"leave\",\"give_item\",\"locate_block\",\"set_horror_stage\",\"disable_horror_fx\",\"enable_horror_fx\",\"start_game\",\"light_hit\"],");
         appendSynaState(sb);
 
         if (server == null) {
@@ -96,7 +117,14 @@ public final class BridgeState {
         sb.append("\"pitch\":").append(round(player.getXRot())).append(",");
         sb.append("\"health\":").append(round(player.getHealth())).append(",");
         sb.append("\"food\":").append(player.getFoodData().getFoodLevel()).append(",");
-        sb.append("\"dimension\":\"").append(escape(level.dimension().location().toString())).append("\"}");
+        sb.append("\"dimension\":\"").append(escape(level.dimension().location().toString())).append("\",");
+        sb.append("\"attention\":").append(PlayerAttentionTracker.get().toJson(player)).append(",");
+        sb.append("\"miningTrajectory\":").append(MiningTrajectoryTracker.get().toJson(player)).append(",");
+        sb.append("\"inventory\":");
+        appendPlayerInventory(sb, player);
+        sb.append(",\"nearbyHostiles\":");
+        appendNearbyHostiles(sb, player);
+        sb.append("}");
         sb.append("}");
         return sb.toString();
     }
@@ -117,6 +145,13 @@ public final class BridgeState {
         sb.append("\"y\":").append(round(syna.getY())).append(",");
         sb.append("\"z\":").append(round(syna.getZ())).append(",");
         sb.append("\"health\":").append(round(syna.getHealth())).append(",");
+        sb.append("\"horrorFxEnabled\":").append(syna.isHorrorFxEnabled()).append(",");
+        SynaManifestationDirector manifestation = SynaManifestationDirector.get();
+        sb.append("\"manifestation\":{");
+        sb.append("\"reason\":\"").append(escape(manifestation.getReason())).append("\",");
+        sb.append("\"lifetimeTicks\":").append(manifestation.getLifetimeTicks()).append(",");
+        sb.append("\"unseenTicks\":").append(manifestation.getUnseenTicks()).append(",");
+        sb.append("\"visibleToPlayer\":").append(manifestation.isCurrentlyVisible()).append("},");
         sb.append("\"task\":\"").append(escape(controller.getCurrentTask())).append("\",");
         sb.append("\"taskDetail\":\"").append(escape(controller.getTaskDetail())).append("\",");
         sb.append("\"horror\":");
@@ -146,6 +181,10 @@ public final class BridgeState {
         sb.append("\"stage\":\"").append(escape(controller.getHorrorStage())).append("\",");
         sb.append("\"anger\":").append(controller.getHorrorAnger()).append(",");
         sb.append("\"target\":\"").append(escape(controller.getHorrorTargetName())).append("\",");
+        sb.append("\"beat\":\"").append(escape(controller.getHorrorBeat())).append("\",");
+        sb.append("\"omenLevel\":").append(controller.getHorrorOmenLevel()).append(",");
+        sb.append("\"episodeId\":").append(controller.getHorrorEpisodeId()).append(",");
+        sb.append("\"lastOutcome\":\"").append(escape(controller.getHorrorLastOutcome())).append("\",");
         sb.append("\"targetKind\":\"").append(escape(controller.getHorrorTargetKind())).append("\",");
         sb.append("\"countdownTicks\":").append(controller.getHorrorCountdownTicks()).append(",");
         sb.append("\"countdownSeconds\":").append(round(controller.getHorrorCountdownTicks() / 20.0D)).append(",");
@@ -199,6 +238,42 @@ public final class BridgeState {
         sb.append("\"item\":\"").append(escape(stack.getItem().toString())).append("\",");
         sb.append("\"count\":").append(stack.getCount());
         sb.append("}");
+    }
+
+    private void appendPlayerInventory(StringBuilder sb, ServerPlayer player) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = player.getInventory().getItem(slot);
+            if (stack.isEmpty()) continue;
+            counts.merge(stack.getItem().toString(), stack.getCount(), Integer::sum);
+        }
+        sb.append("[");
+        boolean first = true;
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("{\"item\":\"").append(escape(entry.getKey())).append("\",");
+            sb.append("\"count\":").append(entry.getValue()).append("}");
+        }
+        sb.append("]");
+    }
+
+    private void appendNearbyHostiles(StringBuilder sb, ServerPlayer player) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (LivingEntity entity : player.level().getEntitiesOfClass(LivingEntity.class,
+                player.getBoundingBox().inflate(24.0D), entity -> entity.isAlive()
+                        && (entity instanceof Enemy || entity.getPersistentData().getBoolean("SynaDirectedEntity")))) {
+            counts.merge(entity.getType().toString(), 1, Integer::sum);
+        }
+        sb.append("[");
+        boolean first = true;
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("{\"entity\":\"").append(escape(entry.getKey())).append("\",");
+            sb.append("\"count\":").append(entry.getValue()).append("}");
+        }
+        sb.append("]");
     }
 
     private synchronized void appendDebugLog(StringBuilder sb) {

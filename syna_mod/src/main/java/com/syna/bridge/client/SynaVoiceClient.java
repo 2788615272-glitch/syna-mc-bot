@@ -1,12 +1,16 @@
 package com.syna.bridge.client;
 
 import com.mojang.logging.LogUtils;
+import com.syna.bridge.AliceEntity;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
 import org.slf4j.Logger;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.DataLine;
+import javax.sound.sampled.FloatControl;
 import javax.sound.sampled.SourceDataLine;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
@@ -62,10 +66,6 @@ public final class SynaVoiceClient {
         int playGeneration = PLAY_GENERATION.incrementAndGet();
         stopCurrentLine();
         CompletableFuture.runAsync(() -> {
-            if (generation > 0 && generation < playGeneration) {
-                LOGGER.info("[SynaVoiceClient] skipped stale voice id={} generation={}", voiceId, generation);
-                return;
-            }
             if (audioBytes != null && audioBytes.length > 0) {
                 LOGGER.info("[SynaVoiceClient] playing inline voice id={} speaker={} bytes={}", voiceId, speaker, audioBytes.length);
                 playWav(new ByteArrayInputStream(audioBytes), "inline audio", speaker, text, playGeneration);
@@ -110,6 +110,7 @@ public final class SynaVoiceClient {
                 try (SourceDataLine line = (SourceDataLine) AudioSystem.getLine(info)) {
                     currentLine = line;
                     line.open(playFormat);
+                    applySpatialControls(line);
                     line.start();
                     byte[] buffer = new byte[8192];
                     int read;
@@ -129,6 +130,39 @@ public final class SynaVoiceClient {
             if (PLAY_GENERATION.get() == playGeneration) {
                 LOGGER.warn("[SynaVoiceClient] Failed to play voice from {}: {}", sourceLabel, e.getMessage());
             }
+        }
+    }
+
+    private static void applySpatialControls(SourceDataLine line) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) return;
+        Entity source = null;
+        for (Entity entity : mc.level.entitiesForRendering()) {
+            if (entity instanceof AliceEntity) {
+                source = entity;
+                break;
+            }
+        }
+        if (source == null) return;
+
+        double dx = source.getX() - mc.player.getX();
+        double dz = source.getZ() - mc.player.getZ();
+        double distance = Math.sqrt(dx * dx + dz * dz);
+        float volume = (float) Math.max(0.08D, Math.min(1.0D, 1.0D - distance / 32.0D));
+        double yaw = Math.toRadians(mc.player.getYRot());
+        double rightX = Math.cos(yaw);
+        double rightZ = Math.sin(yaw);
+        double length = Math.max(0.001D, distance);
+        float pan = (float) Math.max(-1.0D, Math.min(1.0D, (dx * rightX + dz * rightZ) / length));
+
+        if (line.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
+            FloatControl gain = (FloatControl) line.getControl(FloatControl.Type.MASTER_GAIN);
+            float db = (float) (20.0D * Math.log10(volume));
+            gain.setValue(Math.max(gain.getMinimum(), Math.min(gain.getMaximum(), db)));
+        }
+        if (line.isControlSupported(FloatControl.Type.PAN)) {
+            FloatControl panControl = (FloatControl) line.getControl(FloatControl.Type.PAN);
+            panControl.setValue(Math.max(panControl.getMinimum(), Math.min(panControl.getMaximum(), pan)));
         }
     }
 

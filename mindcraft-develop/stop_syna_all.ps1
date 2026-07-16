@@ -15,6 +15,8 @@ $ports = @(8081, 8766)
 $cmdMarkers = @(
     'mindcraft-develop\main.js',
     'mindcraft-develop/main.js',
+    'src\core\pure_mod_core.js',
+    'src/core/pure_mod_core.js',
     'syna_voice_server.py',
     'syna_asr_server.py'
 )
@@ -51,7 +53,7 @@ foreach ($p in $ports) {
 # 2) CommandLine-based cleanup: catch orphans that aren't bound to a port yet.
 try {
     $procs = Get-CimInstance Win32_Process -ErrorAction Stop |
-             Where-Object { $_.Name -in @('node.exe', 'python.exe', 'pythonw.exe') }
+             Where-Object { $_.Name -in @('node.exe', 'python.exe', 'pythonw.exe', 'python3.exe', 'python3.13.exe') }
     foreach ($p in $procs) {
         $cl = [string]$p.CommandLine
         if ([string]::IsNullOrWhiteSpace($cl)) { continue }
